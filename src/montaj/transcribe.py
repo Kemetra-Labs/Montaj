@@ -18,9 +18,11 @@ from pydantic import AliasChoices, BaseModel, Field, ValidationError, model_vali
 from montaj.budget import Budget, BudgetExceeded, BudgetOverride
 from montaj.config import Settings
 from montaj.costs import Service, Usage
+from montaj.db import connect, fetch, save_source
 from montaj.external import CallContext, CallResult, ExternalCallError, call_external
 from montaj.ingest import load_source
 from montaj.media import MediaError, atomic_text, file_hash, source_lock
+from montaj.models import Source
 from montaj.pipeline import input_hash
 
 # Deepgram caps audio files at 2 GB and Nova processing time at ten minutes.
@@ -123,6 +125,71 @@ class DeepgramTranscriber:
         )
 
 
+class SpeechError(ValueError):
+    """The transcript cannot be sent to a paid language-model stage."""
+
+    def __init__(self, message: str, *, code: int) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def languages_match(requested: str, detected: str) -> bool:
+    """Treat a language family as a match. `multi` accepts whatever was detected."""
+    if requested.casefold() == "multi":
+        return True
+    requested_family = requested.casefold().split("-", 1)[0]
+    detected_family = detected.casefold().split("-", 1)[0]
+    return requested_family == detected_family
+
+
+def require_usable_speech(source: Source) -> None:
+    """Stop candidates, rank, and draft before they call Claude."""
+    if source.speech_status == "language_mismatch":
+        raise SpeechError(
+            f"Source {source.id} was transcribed as a different language. "
+            "Rerun transcribe with --force-language to continue.",
+            code=7,
+        )
+    if source.speech_status == "no_usable_speech":
+        raise SpeechError(f"Source {source.id} has no usable speech.", code=6)
+    if source.speech_status == "failed":
+        raise SpeechError(
+            source.failure_note or f"Source {source.id} failed before transcription.",
+            code=4,
+        )
+
+
+def _record_speech(
+    settings: Settings,
+    source_id: int,
+    transcript: Transcript,
+    requested: str,
+    *,
+    force_language: bool,
+) -> None:
+    with connect(settings.db_path) as db:
+        source = fetch(db, Source, source_id)
+        if source is None:
+            raise SpeechError(f"Source {source_id} does not exist.", code=1)
+        source.requested_language = requested
+        error: SpeechError | None = None
+        if not force_language and not languages_match(requested, transcript.language):
+            source.speech_status = "language_mismatch"
+            source.failure_note = (
+                f"Requested {requested}, detected {transcript.language}."
+            )
+            error = SpeechError(
+                f"{source.failure_note} No further paid stages will run.",
+                code=7,
+            )
+        else:
+            source.speech_status = "ok"
+            source.failure_note = None
+        save_source(db, source)
+    if error is not None:
+        raise error
+
+
 def audio_duration(path: Path) -> float:
     with wave.open(str(path), "rb") as audio:
         return audio.getnframes() / audio.getframerate()
@@ -216,6 +283,7 @@ def transcribe_source(
     language: str,
     budget: Budget,
     backend: Transcriber | None = None,
+    force_language: bool = False,
 ) -> tuple[Transcript, bool]:
     _, _, directory = load_source(settings, source_id)
     audio = directory / "audio.wav"
@@ -233,22 +301,30 @@ def transcribe_source(
         )
         cached = _read_cached(output)
         if cached is not None and cached.input_hash == key:
-            return cached, True
-        if audio.stat().st_size >= MAX_REQUEST_BYTES or (
-            split_marker.is_file() and split_marker.read_text(encoding="utf-8") == key
-        ):
-            transcript = _transcribe_chunks(audio, client, directory, key, language)
+            transcript, reused = cached, True
         else:
-            try:
-                transcript = client.transcribe(audio)
-            except ExternalCallError as exc:
-                if exc.http_status != 504 or audio_duration(audio) <= CHUNK_SECONDS:
-                    raise
-                atomic_text(split_marker, key)
+            if audio.stat().st_size >= MAX_REQUEST_BYTES or (
+                split_marker.is_file()
+                and split_marker.read_text(encoding="utf-8") == key
+            ):
                 transcript = _transcribe_chunks(audio, client, directory, key, language)
-        transcript = transcript.model_copy(update={"input_hash": key})
-        atomic_text(output, transcript.model_dump_json(indent=2) + "\n")
-    return transcript, False
+            else:
+                try:
+                    transcript = client.transcribe(audio)
+                except ExternalCallError as exc:
+                    if exc.http_status != 504 or audio_duration(audio) <= CHUNK_SECONDS:
+                        raise
+                    atomic_text(split_marker, key)
+                    transcript = _transcribe_chunks(
+                        audio, client, directory, key, language
+                    )
+            transcript = transcript.model_copy(update={"input_hash": key})
+            atomic_text(output, transcript.model_dump_json(indent=2) + "\n")
+            reused = False
+    _record_speech(
+        settings, source_id, transcript, language, force_language=force_language
+    )
+    return transcript, reused
 
 
 def transcribe(
@@ -257,6 +333,10 @@ def transcribe(
         str | None, typer.Option(help="Deepgram language code, such as en or ar-EG.")
     ] = None,
     budget: BudgetOverride = None,
+    force_language: Annotated[
+        bool,
+        typer.Option("--force-language", help="Continue when detection disagrees."),
+    ] = False,
 ) -> None:
     """Transcribe a permitted source with word timestamps."""
     try:
@@ -266,7 +346,11 @@ def transcribe(
             source_id,
             language=language or settings.deepgram_language,
             budget=Budget.from_settings(settings, budget),
+            force_language=force_language,
         )
+    except SpeechError as exc:
+        typer.echo(f"Transcription failed: {exc}", err=True)
+        raise typer.Exit(exc.code) from exc
     except (
         BudgetExceeded,
         ExternalCallError,

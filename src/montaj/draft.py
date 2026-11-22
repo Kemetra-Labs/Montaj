@@ -30,7 +30,7 @@ from montaj.models import (
 )
 from montaj.pipeline import input_hash, is_stale, stage_input_hash
 from montaj.rank import clip_words
-from montaj.transcribe import Transcript
+from montaj.transcribe import Transcript, require_usable_speech
 
 _PROMPT = Path("prompts/draft.md")
 _ACCOUNTS = Path("config/accounts.toml")
@@ -145,6 +145,7 @@ def draft_source(
     llm: LLM | None = None,
 ) -> tuple[int, int]:
     source, _, directory = load_source(settings, source_id)
+    require_usable_speech(source)
     if not _PROMPT.is_file():
         raise ValueError("Draft prompt is missing at prompts/draft.md.")
     template = _PROMPT.read_text(encoding="utf-8")
