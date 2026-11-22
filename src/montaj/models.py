@@ -85,6 +85,7 @@ class Source(Record):
     campaign_id: int | None = None
     source_allowed: bool = False
     added_at: datetime = Field(default_factory=utc_now)
+    input_key: str | None = None
 
 
 class ClipStatus(StrEnum):
