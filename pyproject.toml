@@ -1,0 +1,30 @@
+[project]
+name = "montaj"
+version = "0.1.0"
+description = "Prepare reviewed short clips from permitted videos."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2,<3", "typer>=0.16,<1"]
+
+[project.scripts]
+montaj = "montaj.cli:app"
+
+[dependency-groups]
+dev = ["mypy>=1,<3", "pytest>=8,<10", "ruff>=0.11,<1"]
+
+[build-system]
+requires = ["uv_build>=0.13.3,<0.14"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
