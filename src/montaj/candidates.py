@@ -224,6 +224,7 @@ def find_candidates(
     bounds: CandidateBounds,
     budget: Budget,
     llm: LLM | None = None,
+    wait: float = 0,
 ) -> tuple[CandidateSet, bool]:
     source, _, directory = load_source(settings, source_id)
     require_usable_speech(source)
@@ -233,7 +234,7 @@ def find_candidates(
     template = Path("prompts/candidates.md").read_text(encoding="utf-8")
     client = llm or Claude(settings, source_id, "candidates", budget)
     output = directory / "candidates.json"
-    with source_lock(directory):
+    with source_lock(directory, command="candidates", wait=wait):
         transcript = Transcript.model_validate_json(transcript_file.read_bytes())
         key = input_hash(
             transcript.model_dump(mode="json"),
@@ -265,6 +266,10 @@ def candidates(
     min_seconds: Annotated[float, typer.Option(min=0)] = 20,
     max_seconds: Annotated[float, typer.Option(min=0)] = 60,
     budget: BudgetOverride = None,
+    wait: Annotated[
+        float,
+        typer.Option("--wait", min=0, help="Seconds to wait if this source is locked."),
+    ] = 0,
 ) -> None:
     """Find word-aligned candidate moments in a source transcript."""
     try:
@@ -274,6 +279,7 @@ def candidates(
             source_id,
             bounds=CandidateBounds(min_seconds=min_seconds, max_seconds=max_seconds),
             budget=Budget.from_settings(settings, budget),
+            wait=wait,
         )
     except (
         BudgetExceeded,

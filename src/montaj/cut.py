@@ -155,11 +155,12 @@ def cut_source(
     clip_id: int | None = None,
     *,
     renderer: Renderer | None = None,
+    wait: float = 0,
 ) -> tuple[int, int]:
     _, metadata, directory = load_source(settings, source_id)
     video = directory / "video.mp4"
     changed = 0
-    with source_lock(directory):
+    with source_lock(directory, command="cut", wait=wait):
         clips = selected_clips(settings, source_id, directory, clip_id)
         inputs = render_inputs(video)
         cutter = renderer or FFmpegRenderer()
@@ -173,10 +174,14 @@ def cut_source(
 def cut(
     source_id: Annotated[int, typer.Argument(min=1)],
     clip: Annotated[int | None, typer.Option(min=1)] = None,
+    wait: Annotated[
+        float,
+        typer.Option("--wait", min=0, help="Seconds to wait if this source is locked."),
+    ] = 0,
 ) -> None:
     """Render ranked clips as vertical MP4 files."""
     try:
-        rendered, reused = cut_source(Settings.from_env(), source_id, clip)
+        rendered, reused = cut_source(Settings.from_env(), source_id, clip, wait=wait)
     except (MediaError, OSError, ValueError, sqlite3.Error) as exc:
         typer.echo(f"Cut failed: {exc}", err=True)
         raise typer.Exit(1) from exc

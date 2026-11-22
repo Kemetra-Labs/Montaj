@@ -229,6 +229,7 @@ def check_source(
     *,
     clip_id: int | None = None,
     account_id: int | None = None,
+    wait: float = 0,
 ) -> list[tuple[Clip, ClipCheck]]:
     source, _, directory = load_source(settings, source_id)
     with connect(settings.db_path) as db:
@@ -250,7 +251,7 @@ def check_source(
     )
     terms = medical_terms()
     outcomes: list[tuple[Clip, ClipCheck]] = []
-    with source_lock(directory):
+    with source_lock(directory, command="check", wait=wait):
         clips = selected_clips(settings, source_id, directory, clip_id)
         transcript = Transcript.model_validate_json(
             (directory / "transcript.json").read_bytes()
@@ -294,11 +295,19 @@ def check(
     source_id: Annotated[int, typer.Argument(min=1)],
     clip: Annotated[int | None, typer.Option(min=1)] = None,
     account: Annotated[int | None, typer.Option(min=1)] = None,
+    wait: Annotated[
+        float,
+        typer.Option("--wait", min=0, help="Seconds to wait if this source is locked."),
+    ] = 0,
 ) -> None:
     """Check drafted clips against campaign rules."""
     try:
         outcomes = check_source(
-            Settings.from_env(), source_id, clip_id=clip, account_id=account
+            Settings.from_env(),
+            source_id,
+            clip_id=clip,
+            account_id=account,
+            wait=wait,
         )
     except (MediaError, OSError, ValueError, sqlite3.Error) as exc:
         typer.echo(f"Check failed: {exc}", err=True)

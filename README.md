@@ -108,7 +108,7 @@ Each command takes a source id printed by ingest. A finished stage is reused whe
 
 `cut`, `captions`, `draft`, and `check` accept `--clip` to limit the command to one clip.
 
-`run` calls those stages in order for one source: transcribe, candidates, rank, cut, captions, draft, check. It skips a stage whose output is already current, stops at the first failure, and resumes there on the next run. It never reviews, exports, or posts. `--until captions` stops after captions. `--campaign` is passed to rank. `--budget` overrides both spending ceilings for the whole run, so every paid stage in that run shares one ceiling.
+`run` calls those stages in order for one source: transcribe, candidates, rank, cut, captions, draft, check. It skips a stage whose output is already current, stops at the first failure, and resumes there on the next run. It never reviews, exports, or posts. `--until captions` stops after captions. `--campaign` is passed to rank. `--budget` overrides both spending ceilings for the whole run, so every paid stage in that run shares one ceiling. `run` and each writing stage take `data/sources/<id>/.lock` and refuse with the holder's name and start time when another command has it. `--wait 30` waits that many seconds instead. `costs`, `doctor`, and the list commands do not take the lock.
 
 ```bash
 uv run montaj run 1 --until check

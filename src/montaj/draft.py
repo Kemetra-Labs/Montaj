@@ -143,6 +143,7 @@ def draft_source(
     clip_id: int | None,
     budget: Budget,
     llm: LLM | None = None,
+    wait: float = 0,
 ) -> tuple[int, int]:
     source, _, directory = load_source(settings, source_id)
     require_usable_speech(source)
@@ -180,7 +181,7 @@ def draft_source(
         "draft-v1",
     )
     drafted = 0
-    with source_lock(directory):
+    with source_lock(directory, command="draft", wait=wait):
         clips = selected_clips(settings, source_id, directory, clip_id)
         transcript = Transcript.model_validate_json(
             (directory / "transcript.json").read_bytes()
@@ -248,6 +249,10 @@ def draft(
     source_id: Annotated[int, typer.Argument(min=1)],
     clip: Annotated[int | None, typer.Option(min=1)] = None,
     budget: BudgetOverride = None,
+    wait: Annotated[
+        float,
+        typer.Option("--wait", min=0, help="Seconds to wait if this source is locked."),
+    ] = 0,
 ) -> None:
     """Write two hooks, a caption, and hashtags for captioned clips."""
     try:
@@ -257,6 +262,7 @@ def draft(
             source_id,
             clip_id=clip,
             budget=Budget.from_settings(settings, budget),
+            wait=wait,
         )
     except (
         BudgetExceeded,

@@ -142,6 +142,7 @@ def rank_source(
     top: int,
     budget: Budget,
     llm: LLM | None = None,
+    wait: float = 0,
 ) -> tuple[RankSet, bool]:
     if top < 1:
         raise ValueError("Select at least one clip with --top.")
@@ -157,7 +158,7 @@ def rank_source(
     )
     template = Path("prompts/rank.md").read_text(encoding="utf-8")
     output = directory / "rank.json"
-    with source_lock(directory):
+    with source_lock(directory, command="rank", wait=wait):
         candidates = CandidateSet.model_validate_json(
             (directory / "candidates.json").read_bytes()
         )
@@ -234,6 +235,10 @@ def rank(
     campaign: Annotated[int | None, typer.Option(min=1)] = None,
     top: Annotated[int, typer.Option(min=1)] = 10,
     budget: BudgetOverride = None,
+    wait: Annotated[
+        float,
+        typer.Option("--wait", min=0, help="Seconds to wait if this source is locked."),
+    ] = 0,
 ) -> None:
     """Rank candidate clips using campaign rules."""
     try:
@@ -244,6 +249,7 @@ def rank(
             campaign_id=campaign,
             top=top,
             budget=Budget.from_settings(settings, budget),
+            wait=wait,
         )
     except (
         BudgetExceeded,

@@ -217,14 +217,18 @@ def burn_clip(
 
 
 def caption_source(
-    settings: Settings, source_id: int, clip_id: int | None = None
+    settings: Settings,
+    source_id: int,
+    clip_id: int | None = None,
+    *,
+    wait: float = 0,
 ) -> tuple[int, int]:
     _, _, directory = load_source(settings, source_id)
     transcript_path = directory / "transcript.json"
     style = load_caption_style()
     font = settings.resolved_font_path
     changed = 0
-    with source_lock(directory):
+    with source_lock(directory, command="captions", wait=wait):
         clips = selected_clips(settings, source_id, directory, clip_id)
         transcript = Transcript.model_validate_json(transcript_path.read_bytes())
         inputs = caption_inputs(directory / "video.mp4", transcript_path, font, style)
@@ -237,10 +241,16 @@ def caption_source(
 def captions(
     source_id: Annotated[int, typer.Argument(min=1)],
     clip: Annotated[int | None, typer.Option(min=1)] = None,
+    wait: Annotated[
+        float,
+        typer.Option("--wait", min=0, help="Seconds to wait if this source is locked."),
+    ] = 0,
 ) -> None:
     """Burn word-synced captions into ranked clips."""
     try:
-        rendered, reused = caption_source(Settings.from_env(), source_id, clip)
+        rendered, reused = caption_source(
+            Settings.from_env(), source_id, clip, wait=wait
+        )
     except (MediaError, OSError, ValueError, sqlite3.Error) as exc:
         typer.echo(f"Captions failed: {exc}", err=True)
         raise typer.Exit(1) from exc
