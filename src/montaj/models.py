@@ -74,6 +74,7 @@ class Account(Record):
     platform: Platform
     handle: str
     niche: Niche
+    style_notes: str | None = None
 
 
 class Source(Record):

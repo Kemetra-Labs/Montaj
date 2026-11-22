@@ -9,7 +9,7 @@ from typing import Any
 
 from montaj.models import Account, Campaign, Clip, Earning, Metric, Post, Record, Source
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -94,8 +94,8 @@ _QUERIES: dict[type[Record], tuple[str, str]] = {
         "SELECT * FROM campaigns WHERE id = ?",
     ),
     Account: (
-        """INSERT INTO accounts (id, platform, handle, niche)
-           VALUES (:id, :platform, :handle, :niche) RETURNING *""",
+        """INSERT INTO accounts (id, platform, handle, niche, style_notes)
+           VALUES (:id, :platform, :handle, :niche, :style_notes) RETURNING *""",
         "SELECT * FROM accounts WHERE id = ?",
     ),
     Source: (
@@ -163,7 +163,12 @@ _BUDGET_MIGRATION = (
     "CREATE INDEX api_calls_run ON api_calls (run_id)",
 )
 
-_MIGRATIONS = {1: _CLIP_MIGRATION, 2: _COST_MIGRATION, 3: _BUDGET_MIGRATION}
+_MIGRATIONS = {
+    1: _CLIP_MIGRATION,
+    2: _COST_MIGRATION,
+    3: _BUDGET_MIGRATION,
+    4: ("ALTER TABLE accounts ADD COLUMN style_notes TEXT",),
+}
 
 
 class SchemaVersionError(ValueError):
