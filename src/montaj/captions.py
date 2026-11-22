@@ -42,6 +42,29 @@ def load_caption_style() -> CaptionStyle:
         return CaptionStyle.model_validate(tomllib.load(style))
 
 
+def source_inputs(
+    settings: Settings,
+    directory: Path,
+    *,
+    rules_hash: str = "",
+    extra: dict[ClipStage, str] | None = None,
+) -> ClipInputs:
+    """Build the clip-stage fingerprints shared by captions, draft, and check."""
+    style = load_caption_style()
+    base = caption_inputs(
+        directory / "video.mp4",
+        directory / "transcript.json",
+        settings.resolved_font_path,
+        style,
+    )
+    return ClipInputs(
+        source_hash=base.source_hash,
+        transcript_hash=base.transcript_hash,
+        rules_hash=rules_hash,
+        stage_options={**base.stage_options, **(extra or {})},
+    )
+
+
 def caption_inputs(
     video: Path, transcript_path: Path, font: Path, style: CaptionStyle
 ) -> ClipInputs:

@@ -127,6 +127,12 @@ class Clip(Record):
     decision_reason: str | None = None
     hook_text: str | None = None
     hook_style: str | None = None
+    hook_a: str | None = None
+    hook_a_style: str | None = None
+    hook_b: str | None = None
+    hook_b_style: str | None = None
+    hashtags: list[str] = Field(default_factory=list)
+    chosen_hook: str | None = None
     caption: str | None = None
     raw_path: str | None = None
     final_path: str | None = None
@@ -139,10 +145,17 @@ class Clip(Record):
     reviewed_input_hash: str | None = None
     changed_since_review: bool = False
 
-    @field_validator("input_hashes", mode="before")
+    @field_validator("input_hashes", "hashtags", mode="before")
     @classmethod
-    def decode_input_hashes(cls, value: object) -> object:
+    def decode_json_fields(cls, value: object) -> object:
         return json.loads(value) if isinstance(value, str) else value
+
+    @field_validator("chosen_hook")
+    @classmethod
+    def check_chosen_hook(cls, value: str | None) -> str | None:
+        if value is not None and value not in {"a", "b", "edit"}:
+            raise ValueError("chosen_hook must be a, b, or edit")
+        return value
 
 
 class Post(Record):

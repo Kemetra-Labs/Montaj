@@ -13,6 +13,7 @@ from montaj.costs import cost_totals
 from montaj.cut import cut
 from montaj.db import SchemaVersionError, connect, init_db
 from montaj.doctor import checks
+from montaj.draft import draft
 from montaj.ingest import ingest
 from montaj.rank import rank
 from montaj.transcribe import transcribe
@@ -28,6 +29,7 @@ app.command("candidates")(candidates)
 app.command("rank")(rank)
 app.command("cut")(cut)
 app.command("captions")(captions)
+app.command("draft")(draft)
 
 
 @app.callback()
