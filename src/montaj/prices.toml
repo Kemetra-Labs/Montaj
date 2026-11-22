@@ -4,6 +4,9 @@
 [deepgram.nova-3]
 usd_per_minute = 0.0077
 
+[deepgram.nova-3-multilingual]
+usd_per_minute = 0.0092
+
 # https://platform.claude.com/docs/en/models/overview
 [claude.claude-sonnet-5-5]
 usd_per_million_input_tokens = 2.0

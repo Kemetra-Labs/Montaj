@@ -2,8 +2,12 @@
 
 import hashlib
 import shutil
+import sqlite3
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 
 class MediaError(RuntimeError):
@@ -13,6 +17,34 @@ class MediaError(RuntimeError):
 def file_hash(path: Path) -> str:
     with path.open("rb") as media:
         return hashlib.file_digest(media, "sha256").hexdigest()
+
+
+def atomic_text(path: Path, content: str) -> None:
+    temporary: Path | None = None
+    try:
+        with NamedTemporaryFile(dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            output.write(content.encode("utf-8"))
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+@contextmanager
+def source_lock(directory: Path) -> Iterator[None]:
+    """Serialize source artifact writes without locking the main database."""
+    connection = sqlite3.connect(directory / ".pipeline-lock.db", timeout=0)
+    try:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            raise MediaError(
+                "This source is already being processed or cannot be locked."
+            ) from exc
+        yield
+    finally:
+        connection.close()
 
 
 def run_tool(tool: str, args: list[str], *, cwd: Path | None = None) -> str:

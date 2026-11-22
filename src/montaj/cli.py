@@ -11,6 +11,7 @@ from montaj.costs import cost_totals
 from montaj.db import SchemaVersionError, connect, init_db
 from montaj.doctor import checks
 from montaj.ingest import ingest
+from montaj.transcribe import transcribe
 
 app = typer.Typer(no_args_is_help=True)
 db_app = typer.Typer(no_args_is_help=True)
@@ -18,6 +19,7 @@ app.add_typer(db_app, name="db", help="Manage the SQLite database.")
 app.add_typer(campaign_app, name="campaign", help="Manage campaigns and their rules.")
 app.add_typer(account_app, name="account", help="Manage posting accounts.")
 app.command("ingest")(ingest)
+app.command("transcribe")(transcribe)
 
 
 @app.callback()
