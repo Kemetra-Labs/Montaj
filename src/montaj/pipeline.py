@@ -33,7 +33,18 @@ def _fingerprints(clip: Clip, inputs: ClipInputs | None) -> dict[ClipStage, str]
         clip.moment_type,
         options.get(ClipStage.DRAFT),
     )
-    content = input_hash(captions, clip.hook_text, clip.caption)
+    content = input_hash(
+        captions,
+        clip.hook_text,
+        clip.hook_style,
+        clip.hook_a,
+        clip.hook_a_style,
+        clip.hook_b,
+        clip.hook_b_style,
+        clip.caption,
+        clip.hashtags,
+        clip.chosen_hook,
+    )
     check = input_hash(content, values.rules_hash, options.get(ClipStage.CHECK))
     return {
         ClipStage.CUT: cut,

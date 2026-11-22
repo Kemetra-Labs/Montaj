@@ -9,7 +9,7 @@ from typing import Any
 
 from montaj.models import Account, Campaign, Clip, Earning, Metric, Post, Record, Source
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 _SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -106,11 +106,12 @@ _QUERIES: dict[type[Record], tuple[str, str]] = {
     ),
     Clip: (
         """INSERT INTO clips (id, source_id, start_s, end_s, moment_type, score, hook_text,
-           hook_style, caption, raw_path, final_path, status, input_hashes, draft_quotes_clip,
+           hook_style, hook_a, hook_a_style, hook_b, hook_b_style, hashtags, chosen_hook,
+           caption, raw_path, final_path, status, input_hashes, draft_quotes_clip,
            check_result, check_input_hash, reviewed_at, reviewed_input_hash, changed_since_review,
            decision_reason)
-           VALUES (:id, :source_id,
-           :start_s, :end_s, :moment_type, :score, :hook_text, :hook_style,
+           VALUES (:id, :source_id, :start_s, :end_s, :moment_type, :score, :hook_text,
+           :hook_style, :hook_a, :hook_a_style, :hook_b, :hook_b_style, :hashtags, :chosen_hook,
            :caption, :raw_path, :final_path, :status, :input_hashes, :draft_quotes_clip,
            :check_result, :check_input_hash, :reviewed_at, :reviewed_input_hash,
            :changed_since_review, :decision_reason) RETURNING *""",
@@ -174,6 +175,15 @@ _MIGRATIONS = {
         "CREATE UNIQUE INDEX sources_input_key ON sources(input_key)",
     ),
     6: ("ALTER TABLE clips ADD COLUMN decision_reason TEXT",),
+    7: (
+        "ALTER TABLE clips ADD COLUMN hook_a TEXT",
+        "ALTER TABLE clips ADD COLUMN hook_a_style TEXT",
+        "ALTER TABLE clips ADD COLUMN hook_b TEXT",
+        "ALTER TABLE clips ADD COLUMN hook_b_style TEXT",
+        "ALTER TABLE clips ADD COLUMN hashtags TEXT NOT NULL DEFAULT '[]'",
+        """ALTER TABLE clips ADD COLUMN chosen_hook TEXT
+           CHECK (chosen_hook IN ('a', 'b', 'edit'))""",
+    ),
 }
 
 
@@ -221,6 +231,7 @@ def _record_values(record: Record) -> dict[str, Any]:
     values = record.model_dump(mode="json")
     if isinstance(record, Clip):
         values["input_hashes"] = json.dumps(values["input_hashes"], sort_keys=True)
+        values["hashtags"] = json.dumps(values["hashtags"], ensure_ascii=False)
     return values
 
 
@@ -245,7 +256,10 @@ def save_clip(db: sqlite3.Connection, clip: Clip) -> None:
     """Persist a clip's stage outputs and review state together."""
     updated = db.execute(
         """UPDATE clips SET start_s = :start_s, end_s = :end_s, moment_type = :moment_type,
-           score = :score, hook_text = :hook_text, hook_style = :hook_style, caption = :caption,
+           score = :score, hook_text = :hook_text, hook_style = :hook_style,
+           hook_a = :hook_a, hook_a_style = :hook_a_style, hook_b = :hook_b,
+           hook_b_style = :hook_b_style, hashtags = :hashtags, chosen_hook = :chosen_hook,
+           caption = :caption,
            raw_path = :raw_path, final_path = :final_path, status = :status,
            input_hashes = :input_hashes, draft_quotes_clip = :draft_quotes_clip,
            check_result = :check_result, check_input_hash = :check_input_hash,
