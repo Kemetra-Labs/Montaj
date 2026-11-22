@@ -24,7 +24,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg fontconfig
-          install -D -m 644 assets/fonts/NotoSansArabic-Regular.ttf \
+          install -D -m 644 src/montaj/assets/fonts/NotoSansArabic-Regular.ttf \
             "$HOME/.local/share/fonts/montaj/NotoSansArabic-Regular.ttf"
           fc-cache -f "$HOME/.local/share/fonts/montaj"
           ffmpeg -version

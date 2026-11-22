@@ -7,6 +7,7 @@ import typer
 from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.db import SchemaVersionError, connect, init_db
+from montaj.doctor import checks
 
 app = typer.Typer(no_args_is_help=True)
 db_app = typer.Typer(no_args_is_help=True)
@@ -16,6 +17,24 @@ app.add_typer(db_app, name="db", help="Manage the SQLite database.")
 @app.callback()
 def main() -> None:
     """Prepare reviewed short clips from permitted videos."""
+
+
+@app.command("doctor")
+def doctor() -> None:
+    """Check tools, credentials, and local assets without making network calls."""
+    try:
+        settings = Settings.from_env()
+    except ValueError as exc:
+        typer.echo(
+            "Invalid environment configuration. Check MONTAJ_* settings.", err=True
+        )
+        raise typer.Exit(1) from exc
+    results = checks(settings)
+    for check in results:
+        status = "OK" if check.ok else "FAIL"
+        typer.echo(f"{status:4}  {check.name}: {check.detail}")
+    if any(not check.ok for check in results):
+        raise typer.Exit(1)
 
 
 @db_app.command("init")
