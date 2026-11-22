@@ -46,8 +46,17 @@ class CampaignRules(BaseModel):
     banned_topics: list[RuleText] = Field(default_factory=list)
     banned_words: list[RuleText] = Field(default_factory=list)
     required_hashtags: list[RuleText] = Field(default_factory=list)
+    required_disclosure: str | None = None
+    max_posts_per_day: int | None = Field(default=None, ge=1)
     flag_medical_claims: bool = False
     source_must_be_allowed: bool = True
+
+    @field_validator("required_disclosure", mode="before")
+    @classmethod
+    def strip_disclosure(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        return value.strip() or None
 
     @model_validator(mode="after")
     def check_duration_range(self) -> Self:
