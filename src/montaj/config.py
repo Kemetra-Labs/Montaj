@@ -18,6 +18,10 @@ class Settings(BaseModel):
     claude_model: str | None = None
     font_path: Path | None = None
 
+    @property
+    def db_path(self) -> Path:
+        return self.data_dir / "montaj.db"
+
     @classmethod
     def from_env(cls) -> "Settings":
         """Load exported environment variables, treating blanks as unset."""
