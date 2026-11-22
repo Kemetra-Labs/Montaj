@@ -20,6 +20,14 @@ jobs:
           version: "0.13.3"
           python-version: "3.12"
           enable-cache: true
+      - name: Install media test requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg fontconfig
+          install -D -m 644 assets/fonts/NotoSansArabic-Regular.ttf \
+            "$HOME/.local/share/fonts/montaj/NotoSansArabic-Regular.ttf"
+          fc-cache -f "$HOME/.local/share/fonts/montaj"
+          ffmpeg -version
       - run: uv sync --locked --no-build --no-install-project
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
@@ -27,3 +35,4 @@ jobs:
       - run: uv run --no-sync pytest
         env:
           PYTHONPATH: src
+          MONTAJ_REQUIRE_FFMPEG: "1"

@@ -28,3 +28,4 @@ strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["media: requires a local FFmpeg executable"]
