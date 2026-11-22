@@ -28,7 +28,7 @@ class ExternalCallError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class CallContext:
     db_path: Path
-    source_id: int
+    source_id: int | None
     stage: str
     service: Service
     model: str
@@ -74,6 +74,17 @@ def _http_failure(error: HTTPError) -> _Failure:
         return _Failure("quota or billing limit reached")
     if status in (401, 403):
         return _Failure(f"authentication or permissions failed (HTTP {status})")
+    if any(
+        phrase in payload
+        for phrase in (
+            "not_found_error",
+            "model_not_found",
+            "invalid model",
+            "unknown model",
+            "invalid_model",
+        )
+    ):
+        return _Failure("unknown model name")
     if status == 429 or 500 <= status < 600:
         return _Failure(
             f"temporary HTTP {status}", True, retry_after, status >= 500, status

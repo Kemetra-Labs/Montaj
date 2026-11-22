@@ -9,7 +9,7 @@ from typing import Any
 
 from montaj.models import Account, Campaign, Clip, Earning, Metric, Post, Record, Source
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 _SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -195,6 +195,31 @@ _MIGRATIONS = {
     9: (
         "ALTER TABLE sources ADD COLUMN allowed_basis TEXT",
         "ALTER TABLE sources ADD COLUMN allowed_at TEXT",
+    ),
+    # A doctor probe is not a source, so its cost row has no source id.
+    10: (
+        """CREATE TABLE api_calls_next (
+            id INTEGER PRIMARY KEY,
+            source_id INTEGER REFERENCES sources(id),
+            stage TEXT NOT NULL,
+            service TEXT NOT NULL CHECK (service IN ('deepgram', 'claude')),
+            input_tokens INTEGER CHECK (input_tokens >= 0),
+            output_tokens INTEGER CHECK (output_tokens >= 0),
+            seconds REAL CHECK (seconds >= 0),
+            estimated_cost_usd REAL NOT NULL CHECK (estimated_cost_usd >= 0),
+            created_at TEXT NOT NULL,
+            run_id TEXT,
+            outcome TEXT NOT NULL DEFAULT 'success'
+        )""",
+        """INSERT INTO api_calls_next (
+               id, source_id, stage, service, input_tokens, output_tokens, seconds,
+               estimated_cost_usd, created_at, run_id, outcome)
+           SELECT id, source_id, stage, service, input_tokens, output_tokens, seconds,
+                  estimated_cost_usd, created_at, run_id, outcome FROM api_calls""",
+        "DROP TABLE api_calls",
+        "ALTER TABLE api_calls_next RENAME TO api_calls",
+        "CREATE INDEX api_calls_source_stage ON api_calls (source_id, stage)",
+        "CREATE INDEX api_calls_run ON api_calls (run_id)",
     ),
 }
 

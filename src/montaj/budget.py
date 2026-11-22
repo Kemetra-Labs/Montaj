@@ -44,21 +44,25 @@ class Budget:
 
 
 def check_budget(
-    db: sqlite3.Connection, budget: Budget, source_id: int, stage: str, estimate: float
+    db: sqlite3.Connection,
+    budget: Budget,
+    source_id: int | None,
+    stage: str,
+    estimate: float,
 ) -> None:
     """Compare ceilings under the same write transaction as the reservation."""
     run_spend = db.execute(
         "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM api_calls WHERE run_id = ?",
         (budget.run_id,),
     ).fetchone()[0]
-    source_spend = db.execute(
-        "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM api_calls WHERE source_id = ?",
-        (source_id,),
-    ).fetchone()[0]
-    for label, spent, ceiling in (
-        ("per-run", run_spend, budget.per_run),
-        ("per-source", source_spend, budget.per_source),
-    ):
+    ceilings = [("per-run", run_spend, budget.per_run)]
+    if source_id is not None:
+        source_spend = db.execute(
+            "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM api_calls WHERE source_id = ?",
+            (source_id,),
+        ).fetchone()[0]
+        ceilings.append(("per-source", source_spend, budget.per_source))
+    for label, spent, ceiling in ceilings:
         if spent + estimate > ceiling + 1e-12:
             raise BudgetExceeded(
                 f"{stage}: {label} budget ceiling ${ceiling:.6f}; "
