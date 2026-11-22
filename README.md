@@ -7,7 +7,7 @@ Montaj turns a long video from a permitted source into short vertical clips with
 - Python 3.12
 - [uv](https://docs.astral.sh/uv/)
 - `ffmpeg` and `ffprobe` on `PATH`
-- `yt-dlp` on `PATH` (only for a video URL; a local file does not need it)
+- `yt-dlp` `2026.10.26` on `PATH` (only for a video URL; a local file does not need it). `doctor` warns when the installed version differs. Update with `yt-dlp -U`.
 
 ## Install
 
@@ -33,13 +33,16 @@ Copy `.env.example` to `.env` and fill in the keys. Never commit `.env`.
 | `MONTAJ_MAX_COST_PER_SOURCE_USD` | Spending ceiling for one source. Default `2.00`. |
 | `MONTAJ_MAX_SOURCE_MINUTES` | Longest source accepted at ingest. Default `120`. |
 | `MONTAJ_MAX_SOURCE_MB` | Largest source accepted at ingest. Default `1024`. |
+| `MONTAJ_BACKUP_KEEP` | Newest database copies `backup` keeps. Default `7`. |
+| `MONTAJ_MIN_FREE_MB` | Free space warning, and the floor for starting a download. Default `1024`. |
+| `MONTAJ_CLEAN_OLDER_THAN_DAYS` | Default age for `clean`. Default `14`. |
 
 ```bash
 uv run montaj db init
 uv run montaj doctor
 ```
 
-`doctor` stays offline. It checks `ffmpeg`, `ffprobe`, `yt-dlp`, the two keys (set or missing, never the value), the data directory, the database schema, and the caption font.
+`doctor` stays offline. It checks `ffmpeg`, `ffprobe`, `yt-dlp` (and warns when that version is not `2026.10.26`), the two keys (set or missing, never the value), the data directory, the database schema, the caption font, and free space. Free space under `MONTAJ_MIN_FREE_MB` is a warning, not a failure. A missing tool still fails the command.
 
 `doctor --online` sends one one-second silent clip to Deepgram and one one-token request to Claude, using the configured model names. It prints `OK` or `FAIL` for each service and the estimated cost, which stays under one cent. The calls are written to the cost log and count against the budget. It still does not print key values.
 
@@ -178,12 +181,33 @@ uv run montaj post-log list --account 1 --today
 
 The list shows each post and how many that account logged on each day. The compliance check reads those same rows for the daily cap and the rule against posting one clip twice.
 
+## Backup and clean
+
+```bash
+uv run montaj backup
+```
+
+`backup` writes an online copy of the database to `data/backups/montaj-<UTC timestamp>.db` and keeps the newest `MONTAJ_BACKUP_KEEP` copies (default 7).
+
+```bash
+uv run montaj clean --dry-run
+uv run montaj clean --older-than-days 14
+```
+
+`clean` deletes a source `video.mp4` and a clip `raw.mp4` only when the file is older than the given number of days (default 14) and no unfinished clip still needs it. Posted and rejected clips are finished. A source with no clips, or with any other clip, keeps its video. Final renders, exports, transcripts, and the database are kept. `--dry-run` prints the paths and the bytes it would free, and deletes nothing.
+
+`ingest` refuses to start a download when free space is under `MONTAJ_MIN_FREE_MB`, and refuses a local file larger than the free space, before it copies or downloads.
+
+Long jobs, the env file, log rotation, the nightly backup, and the preview SSH tunnel are in the [server runbook](docs/server.md).
+
 ## Where files go
 
 `data/` is git-ignored.
 
 ```text
 data/montaj.db
+data/backups/montaj-<UTC timestamp>.db
+data/logs/montaj.log
 data/sources/<source id>/video.mp4
 data/sources/<source id>/audio.wav
 data/sources/<source id>/transcript.json
@@ -209,4 +233,5 @@ data/exports/<UTC date>/<account id>-<handle>/manifest.csv
 - [Architecture](docs/ARCHITECTURE.md)
 - [Pipeline contract](docs/pipeline-contract.md)
 - [Campaign rules file](docs/campaign-rules.md)
+- [Server runbook](docs/server.md)
 - [Build roadmap](https://github.com/Kemetra-Labs/montaj/issues/31)

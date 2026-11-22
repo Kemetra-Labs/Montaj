@@ -13,10 +13,12 @@ from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.cut import cut
 from montaj.db import SchemaVersionError, connect, init_db
-from montaj.doctor import checks, online_checks
+from montaj.doctor import Check, checks, online_checks
 from montaj.draft import draft
 from montaj.export import export_clips
+from montaj.housekeeping import HousekeepingError, backup_database, clean_data
 from montaj.ingest import ingest
+from montaj.log import configure_logging
 from montaj.post_log import post_log_app
 from montaj.preview import preview_app
 from montaj.rank import rank
@@ -49,6 +51,18 @@ app.command("export")(export_clips)
 @app.callback()
 def main() -> None:
     """Prepare reviewed short clips from permitted videos."""
+    try:
+        configure_logging(Settings.from_env())
+    except ValueError:
+        return
+
+
+def _status(check: Check) -> str:
+    if not check.ok:
+        return "FAIL"
+    if check.warning:
+        return "WARN"
+    return "OK"
 
 
 @app.command("doctor")
@@ -70,8 +84,7 @@ def doctor(
         probed, cost = online_checks(settings)
         results.extend(probed)
     for check in results:
-        status = "OK" if check.ok else "FAIL"
-        typer.echo(f"{status:4}  {check.name}: {check.detail}")
+        typer.echo(f"{_status(check):4}  {check.name}: {check.detail}")
     if online:
         typer.echo(f"Smoke test: ${cost:.6f}")
     if any(not check.ok for check in results):
@@ -110,3 +123,47 @@ def show_costs(source: int | None = typer.Option(None, min=1)) -> None:
     typer.echo(f"Estimated total: ${totals.total:.6f}")
     if totals.approved_clips:
         typer.echo(f"Per approved clip: ${totals.total / totals.approved_clips:.6f}")
+
+
+@app.command("backup")
+def backup_command() -> None:
+    """Copy the database into data/backups and keep the newest copies."""
+    try:
+        settings = Settings.from_env()
+    except ValueError as exc:
+        typer.echo(
+            "Invalid environment configuration. Check MONTAJ_* settings.", err=True
+        )
+        raise typer.Exit(1) from exc
+    try:
+        path = backup_database(settings)
+    except (HousekeepingError, OSError, sqlite3.Error) as exc:
+        typer.echo(f"Backup failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Backup written to {path}")
+
+
+@app.command("clean")
+def clean_command(
+    older_than_days: int | None = typer.Option(
+        None, "--older-than-days", min=0, help="Only files older than this many days."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print what would be removed and delete nothing."
+    ),
+) -> None:
+    """Delete old source videos and raw renders that finished clips no longer need."""
+    try:
+        settings = Settings.from_env()
+    except ValueError as exc:
+        typer.echo(
+            "Invalid environment configuration. Check MONTAJ_* settings.", err=True
+        )
+        raise typer.Exit(1) from exc
+    try:
+        typer.echo(
+            clean_data(settings, older_than_days=older_than_days, dry_run=dry_run)
+        )
+    except (HousekeepingError, OSError, sqlite3.Error) as exc:
+        typer.echo(f"Clean failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
