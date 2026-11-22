@@ -40,6 +40,8 @@ class Settings(BaseModel):
     retry: RetrySettings = Field(default_factory=RetrySettings)
     max_cost_per_run_usd: float = Field(default=0.5, ge=0, allow_inf_nan=False)
     max_cost_per_source_usd: float = Field(default=2.0, ge=0, allow_inf_nan=False)
+    max_source_minutes: float = Field(default=120, gt=0, allow_inf_nan=False)
+    max_source_mb: float = Field(default=1024, gt=0, allow_inf_nan=False)
 
     @property
     def db_path(self) -> Path:
@@ -77,5 +79,11 @@ class Settings(BaseModel):
             max_cost_per_source_usd=float(
                 getenv("MONTAJ_MAX_COST_PER_SOURCE_USD")
                 or defaults.max_cost_per_source_usd
+            ),
+            max_source_minutes=float(
+                getenv("MONTAJ_MAX_SOURCE_MINUTES") or defaults.max_source_minutes
+            ),
+            max_source_mb=float(
+                getenv("MONTAJ_MAX_SOURCE_MB") or defaults.max_source_mb
             ),
         )
