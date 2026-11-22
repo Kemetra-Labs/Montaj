@@ -117,6 +117,10 @@ uv run montaj clean --older-than-days 14
 
 `montaj doctor` warns when free space on the data volume is below `MONTAJ_MIN_FREE_MB` (default 1024). The warning does not fail `doctor` by itself. `montaj ingest` refuses to start a download when free space is below that floor, and refuses a local file larger than the free space, before it copies or downloads.
 
+## One source at a time
+
+Each command that writes a source or its clips takes `data/sources/<source id>/.lock`. The lock is an OS file lock, so it is released when the process exits, including after a crash. A second command prints the holding command and its start time, then exits non-zero. `--wait 30` on that command, or on `montaj run`, waits up to 30 seconds. `montaj run` holds the lock once for the whole run. `costs`, `doctor`, and the list commands do not take it.
+
 ## yt-dlp
 
 Pinned version: `2026.10.26`. `montaj doctor` prints the installed version and warns when it is not that release. Update with one command:

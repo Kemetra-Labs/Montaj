@@ -316,13 +316,14 @@ def transcribe_source(
     budget: Budget,
     backend: Transcriber | None = None,
     force_language: bool = False,
+    wait: float = 0,
 ) -> tuple[Transcript, bool]:
     _, _, directory = load_source(settings, source_id)
     audio = directory / "audio.wav"
     output = directory / "transcript.json"
     split_marker = directory / "transcript.split"
     client = backend or DeepgramTranscriber(settings, source_id, language, budget)
-    with source_lock(directory):
+    with source_lock(directory, command="transcribe", wait=wait):
         # Nova-3 supports en and Egyptian Arabic ar-EG with word timestamps.
         # https://developers.deepgram.com/changelog/2026/1/27
         key = input_hash(
@@ -369,6 +370,10 @@ def transcribe(
         bool,
         typer.Option("--force-language", help="Continue when detection disagrees."),
     ] = False,
+    wait: Annotated[
+        float,
+        typer.Option("--wait", min=0, help="Seconds to wait if this source is locked."),
+    ] = 0,
 ) -> None:
     """Transcribe a permitted source with word timestamps."""
     try:
@@ -379,6 +384,7 @@ def transcribe(
             language=language or settings.deepgram_language,
             budget=Budget.from_settings(settings, budget),
             force_language=force_language,
+            wait=wait,
         )
     except SpeechError as exc:
         typer.echo(f"Transcription failed: {exc}", err=True)

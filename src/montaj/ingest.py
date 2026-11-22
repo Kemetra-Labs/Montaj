@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, ValidationError
 from montaj.config import Settings
 from montaj.db import connect, fetch, insert, save_source
 from montaj.housekeeping import HousekeepingError, disk_free, require_space
-from montaj.media import MediaError, file_hash, run_tool
+from montaj.media import MediaError, file_hash, run_tool, source_lock
 from montaj.models import Campaign, CampaignRules, Niche, Source, utc_now
 
 
@@ -314,6 +314,7 @@ def ingest_video(
     campaign_id: int | None = None,
     downloader: Downloader | None = None,
     free_bytes: Callable[[Path], int] | None = None,
+    wait: float = 0,
 ) -> tuple[int, bool]:
     if not allowed:
         raise SourceError(
@@ -351,51 +352,52 @@ def ingest_video(
     if source.id is None:
         raise SourceError("Could not assign a source ID.")
     directory = source_dir(settings, source.id)
-    with connect(settings.db_path) as db:
-        db.execute("BEGIN IMMEDIATE")
-        current = fetch(db, Source, source.id)
-        if current is None or not current.source_allowed:
-            raise SourceError(f"Source {source.id} lacks permission.")
-        if current.allowed_basis not in {None, permission}:
-            raise SourceError(
-                f"Source {source.id} already records a different permission basis."
-            )
-        if current.niche != niche or (
-            campaign_id is not None and current.campaign_id != campaign_id
-        ):
-            raise SourceError(
-                f"Source {source.id} is already registered with different source settings."
-            )
-        current.allowed_basis = permission
-        current.allowed_at = current.allowed_at or utc_now()
-        if _ready(directory) is not None:
-            if current.speech_status == "failed":
-                current.speech_status = None
-                current.failure_note = None
+    with source_lock(directory, command="ingest", wait=wait):
+        with connect(settings.db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            current = fetch(db, Source, source.id)
+            if current is None or not current.source_allowed:
+                raise SourceError(f"Source {source.id} lacks permission.")
+            if current.allowed_basis not in {None, permission}:
+                raise SourceError(
+                    f"Source {source.id} already records a different permission basis."
+                )
+            if current.niche != niche or (
+                campaign_id is not None and current.campaign_id != campaign_id
+            ):
+                raise SourceError(
+                    f"Source {source.id} is already registered with different source settings."
+                )
+            current.allowed_basis = permission
+            current.allowed_at = current.allowed_at or utc_now()
+            if _ready(directory) is not None:
+                if current.speech_status == "failed":
+                    current.speech_status = None
+                    current.failure_note = None
+                save_source(db, current)
+                return source.id, True
+            directory.mkdir(parents=True, exist_ok=True)
             save_source(db, current)
-            return source.id, True
-        directory.mkdir(parents=True, exist_ok=True)
-        save_source(db, current)
-    try:
         try:
-            require_space(settings, path, free_bytes or disk_free)
-        except HousekeepingError as exc:
-            raise SourceError(str(exc), code=3) from exc
-        metadata = _artifacts(
-            settings, directory, path, url, downloader or YtDlpDownloader()
-        )
-    except SourceError as exc:
-        _mark_failed(settings, source.id, str(exc))
-        raise
-    with connect(settings.db_path) as db:
-        current = fetch(db, Source, source.id)
-        if current is None:
-            raise SourceError(f"Source {source.id} disappeared during ingest.")
-        current.title = metadata.title
-        current.speech_status = None
-        current.failure_note = None
-        save_source(db, current)
-    return source.id, False
+            try:
+                require_space(settings, path, free_bytes or disk_free)
+            except HousekeepingError as exc:
+                raise SourceError(str(exc), code=3) from exc
+            metadata = _artifacts(
+                settings, directory, path, url, downloader or YtDlpDownloader()
+            )
+        except SourceError as exc:
+            _mark_failed(settings, source.id, str(exc))
+            raise
+        with connect(settings.db_path) as db:
+            current = fetch(db, Source, source.id)
+            if current is None:
+                raise SourceError(f"Source {source.id} disappeared during ingest.")
+            current.title = metadata.title
+            current.speech_status = None
+            current.failure_note = None
+            save_source(db, current)
+        return source.id, False
 
 
 def ingest(
@@ -410,6 +412,10 @@ def ingest(
         str | None,
         typer.Option(help="Short reason this source may be used."),
     ] = None,
+    wait: Annotated[
+        float,
+        typer.Option("--wait", min=0, help="Seconds to wait if this source is locked."),
+    ] = 0,
 ) -> None:
     """Import a local video or a permitted video URL."""
     try:
@@ -420,6 +426,7 @@ def ingest(
             allowed=allowed,
             basis=basis,
             campaign_id=campaign,
+            wait=wait,
         )
     except SourceError as exc:
         typer.echo(f"Ingest failed: {exc}", err=True)

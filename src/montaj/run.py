@@ -16,6 +16,8 @@ from montaj.config import Settings
 from montaj.cut import Renderer, cut_source
 from montaj.db import connect
 from montaj.draft import draft_source
+from montaj.ingest import load_source
+from montaj.media import MediaError, source_lock
 from montaj.rank import rank_source
 from montaj.transcribe import Transcriber, transcribe_source
 
@@ -95,6 +97,7 @@ def run_source(
     backend: Transcriber | None = None,
     llm: LLM | None = None,
     renderer: Renderer | None = None,
+    wait: float = 0,
 ) -> list[StageReport]:
     """Call each existing stage function, stopping at the first failure."""
     if until not in STAGES:
@@ -114,9 +117,11 @@ def run_source(
         "draft": lambda: _draft(settings, source_id, budget, llm),
         "check": lambda: _check(settings, source_id),
     }
+    _, _, directory = load_source(settings, source_id)
     reports: list[StageReport] = []
-    for stage in STAGES[: STAGES.index(until) + 1]:
-        reports.append(_run_stage(settings, source_id, stage, steps[stage]))
+    with source_lock(directory, command="run", wait=wait):
+        for stage in STAGES[: STAGES.index(until) + 1]:
+            reports.append(_run_stage(settings, source_id, stage, steps[stage]))
     return reports
 
 
@@ -214,6 +219,10 @@ def run(
         typer.Option("--force-language", help="Continue when detection disagrees."),
     ] = False,
     top: Annotated[int, typer.Option(min=1)] = 10,
+    wait: Annotated[
+        float,
+        typer.Option("--wait", min=0, help="Seconds to wait if this source is locked."),
+    ] = 0,
 ) -> None:
     """Run transcribe through check. Does not review, export, or post."""
     settings = Settings.from_env()
@@ -227,7 +236,11 @@ def run(
             language=language,
             force_language=force_language,
             top=top,
+            wait=wait,
         )
+    except MediaError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
     except RunError as exc:
         typer.echo(f"Run stopped at {exc}.", err=True)
         raise typer.Exit(1) from exc
