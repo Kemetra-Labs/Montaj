@@ -124,6 +124,7 @@ class Clip(Record):
     end_s: float = Field(gt=0)
     moment_type: str | None = None
     score: float | None = None
+    decision_reason: str | None = None
     hook_text: str | None = None
     hook_style: str | None = None
     caption: str | None = None

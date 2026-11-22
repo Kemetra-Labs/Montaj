@@ -9,7 +9,7 @@ from typing import Any
 
 from montaj.models import Account, Campaign, Clip, Earning, Metric, Post, Record, Source
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 _SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -107,12 +107,13 @@ _QUERIES: dict[type[Record], tuple[str, str]] = {
     Clip: (
         """INSERT INTO clips (id, source_id, start_s, end_s, moment_type, score, hook_text,
            hook_style, caption, raw_path, final_path, status, input_hashes, draft_quotes_clip,
-           check_result, check_input_hash, reviewed_at, reviewed_input_hash, changed_since_review)
+           check_result, check_input_hash, reviewed_at, reviewed_input_hash, changed_since_review,
+           decision_reason)
            VALUES (:id, :source_id,
            :start_s, :end_s, :moment_type, :score, :hook_text, :hook_style,
            :caption, :raw_path, :final_path, :status, :input_hashes, :draft_quotes_clip,
            :check_result, :check_input_hash, :reviewed_at, :reviewed_input_hash,
-           :changed_since_review) RETURNING *""",
+           :changed_since_review, :decision_reason) RETURNING *""",
         "SELECT * FROM clips WHERE id = ?",
     ),
     Post: (
@@ -172,6 +173,7 @@ _MIGRATIONS = {
         "ALTER TABLE sources ADD COLUMN input_key TEXT",
         "CREATE UNIQUE INDEX sources_input_key ON sources(input_key)",
     ),
+    6: ("ALTER TABLE clips ADD COLUMN decision_reason TEXT",),
 }
 
 
@@ -248,7 +250,8 @@ def save_clip(db: sqlite3.Connection, clip: Clip) -> None:
            input_hashes = :input_hashes, draft_quotes_clip = :draft_quotes_clip,
            check_result = :check_result, check_input_hash = :check_input_hash,
            reviewed_at = :reviewed_at, reviewed_input_hash = :reviewed_input_hash,
-           changed_since_review = :changed_since_review WHERE id = :id AND source_id = :source_id
+           changed_since_review = :changed_since_review, decision_reason = :decision_reason
+           WHERE id = :id AND source_id = :source_id
         """,
         _record_values(clip),
     )

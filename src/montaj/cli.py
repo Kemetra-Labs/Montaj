@@ -12,6 +12,7 @@ from montaj.costs import cost_totals
 from montaj.db import SchemaVersionError, connect, init_db
 from montaj.doctor import checks
 from montaj.ingest import ingest
+from montaj.rank import rank
 from montaj.transcribe import transcribe
 
 app = typer.Typer(no_args_is_help=True)
@@ -22,6 +23,7 @@ app.add_typer(account_app, name="account", help="Manage posting accounts.")
 app.command("ingest")(ingest)
 app.command("transcribe")(transcribe)
 app.command("candidates")(candidates)
+app.command("rank")(rank)
 
 
 @app.callback()
