@@ -95,6 +95,9 @@ class Source(Record):
     source_allowed: bool = False
     added_at: datetime = Field(default_factory=utc_now)
     input_key: str | None = None
+    requested_language: str | None = None
+    speech_status: str | None = None
+    failure_note: str | None = None
 
 
 class ClipStatus(StrEnum):

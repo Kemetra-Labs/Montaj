@@ -19,7 +19,7 @@ from montaj.ingest import load_source
 from montaj.media import MediaError, atomic_text, source_lock
 from montaj.models import Campaign, CampaignRules, Clip, ClipStatus
 from montaj.pipeline import input_hash
-from montaj.transcribe import Transcript, Word
+from montaj.transcribe import Transcript, Word, require_usable_speech
 
 
 class Grade(BaseModel):
@@ -146,6 +146,7 @@ def rank_source(
     if top < 1:
         raise ValueError("Select at least one clip with --top.")
     source, _, directory = load_source(settings, source_id)
+    require_usable_speech(source)
     campaign_id = campaign_id or source.campaign_id
     with connect(settings.db_path) as db:
         campaign = fetch(db, Campaign, campaign_id) if campaign_id is not None else None

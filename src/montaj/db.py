@@ -9,7 +9,7 @@ from typing import Any
 
 from montaj.models import Account, Campaign, Clip, Earning, Metric, Post, Record, Source
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 _SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -100,8 +100,10 @@ _QUERIES: dict[type[Record], tuple[str, str]] = {
     ),
     Source: (
         """INSERT INTO sources (id, url, path, title, niche, campaign_id, source_allowed,
-           added_at, input_key) VALUES (:id, :url, :path, :title, :niche, :campaign_id,
-           :source_allowed, :added_at, :input_key) RETURNING *""",
+           added_at, input_key, requested_language, speech_status, failure_note)
+           VALUES (:id, :url, :path, :title, :niche, :campaign_id,
+           :source_allowed, :added_at, :input_key, :requested_language, :speech_status,
+           :failure_note) RETURNING *""",
         "SELECT * FROM sources WHERE id = ?",
     ),
     Clip: (
@@ -184,6 +186,12 @@ _MIGRATIONS = {
         """ALTER TABLE clips ADD COLUMN chosen_hook TEXT
            CHECK (chosen_hook IN ('a', 'b', 'edit'))""",
     ),
+    8: (
+        "ALTER TABLE sources ADD COLUMN requested_language TEXT",
+        """ALTER TABLE sources ADD COLUMN speech_status TEXT
+           CHECK (speech_status IN ('ok', 'language_mismatch', 'no_usable_speech', 'failed'))""",
+        "ALTER TABLE sources ADD COLUMN failure_note TEXT",
+    ),
 }
 
 
@@ -250,6 +258,20 @@ def fetch[T: Record](
     _, select_sql = _QUERIES[model]
     row = db.execute(select_sql, (record_id,)).fetchone()
     return model.model_validate(dict(row)) if row is not None else None
+
+
+def save_source(db: sqlite3.Connection, source: Source) -> None:
+    """Persist source language and failure fields together."""
+    updated = db.execute(
+        """UPDATE sources SET url = :url, path = :path, title = :title, niche = :niche,
+           campaign_id = :campaign_id, source_allowed = :source_allowed, added_at = :added_at,
+           input_key = :input_key, requested_language = :requested_language,
+           speech_status = :speech_status, failure_note = :failure_note
+           WHERE id = :id""",
+        _record_values(source),
+    )
+    if updated.rowcount != 1:
+        raise ValueError(f"Source {source.id} does not exist.")
 
 
 def save_clip(db: sqlite3.Connection, clip: Clip) -> None:

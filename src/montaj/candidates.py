@@ -19,7 +19,7 @@ from montaj.ingest import load_source
 from montaj.media import MediaError, atomic_text, source_lock
 from montaj.models import Clip
 from montaj.pipeline import input_hash
-from montaj.transcribe import Transcript, Word
+from montaj.transcribe import Transcript, Word, require_usable_speech
 
 WINDOW_SECONDS = 450
 STEP_SECONDS = 390
@@ -225,7 +225,8 @@ def find_candidates(
     budget: Budget,
     llm: LLM | None = None,
 ) -> tuple[CandidateSet, bool]:
-    _, _, directory = load_source(settings, source_id)
+    source, _, directory = load_source(settings, source_id)
+    require_usable_speech(source)
     transcript_file = directory / "transcript.json"
     if not transcript_file.is_file():
         raise ValueError(f"Transcribe source {source_id} before finding candidates.")
