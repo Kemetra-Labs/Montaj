@@ -7,6 +7,7 @@ import typer
 from montaj.accounts import account_app
 from montaj.campaigns import campaign_app
 from montaj.candidates import candidates
+from montaj.captions import captions
 from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.cut import cut
@@ -26,6 +27,7 @@ app.command("transcribe")(transcribe)
 app.command("candidates")(candidates)
 app.command("rank")(rank)
 app.command("cut")(cut)
+app.command("captions")(captions)
 
 
 @app.callback()
