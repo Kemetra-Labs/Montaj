@@ -1,3 +1,5 @@
+import os
+import shutil
 import socket
 from pathlib import Path
 
@@ -36,3 +38,14 @@ def db_path(data_dir: Path) -> Path:
 @pytest.fixture
 def media_fixture_dir() -> Path:
     return Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture
+def ffmpeg() -> str:
+    executable = shutil.which("ffmpeg")
+    if executable is None:
+        message = "FFmpeg is required for media tests. Install it and add it to PATH."
+        if os.getenv("MONTAJ_REQUIRE_FFMPEG") == "1":
+            pytest.fail(message)
+        pytest.skip(message)
+    return executable
