@@ -9,6 +9,7 @@ from montaj.campaigns import campaign_app
 from montaj.candidates import candidates
 from montaj.config import Settings
 from montaj.costs import cost_totals
+from montaj.cut import cut
 from montaj.db import SchemaVersionError, connect, init_db
 from montaj.doctor import checks
 from montaj.ingest import ingest
@@ -24,6 +25,7 @@ app.command("ingest")(ingest)
 app.command("transcribe")(transcribe)
 app.command("candidates")(candidates)
 app.command("rank")(rank)
+app.command("cut")(cut)
 
 
 @app.callback()
