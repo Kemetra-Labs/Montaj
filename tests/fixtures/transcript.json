@@ -1,0 +1,186 @@
+{
+  "text": "This fixture uses synthetic speech to test video editing. Each word is stored with its start and end time. The short sample also helps check that video and audio stay aligned. All tests can run offline.",
+  "language": "en",
+  "words": [
+    {
+      "text": "This",
+      "start": 0.0,
+      "end": 0.3257
+    },
+    {
+      "text": "fixture",
+      "start": 0.3857,
+      "end": 0.8545
+    },
+    {
+      "text": "uses",
+      "start": 0.9145,
+      "end": 1.3313
+    },
+    {
+      "text": "synthetic",
+      "start": 1.3913,
+      "end": 1.9774
+    },
+    {
+      "text": "speech",
+      "start": 2.0374,
+      "end": 2.4086
+    },
+    {
+      "text": "to",
+      "start": 2.4686,
+      "end": 2.7119
+    },
+    {
+      "text": "test",
+      "start": 2.7719,
+      "end": 3.1011
+    },
+    {
+      "text": "video",
+      "start": 3.1611,
+      "end": 3.5698
+    },
+    {
+      "text": "editing.",
+      "start": 3.6298,
+      "end": 4.0667
+    },
+    {
+      "text": "Each",
+      "start": 4.2467,
+      "end": 4.5216
+    },
+    {
+      "text": "word",
+      "start": 4.5816,
+      "end": 4.959
+    },
+    {
+      "text": "is",
+      "start": 5.019,
+      "end": 5.3059
+    },
+    {
+      "text": "stored",
+      "start": 5.3659,
+      "end": 5.7785
+    },
+    {
+      "text": "with",
+      "start": 5.8385,
+      "end": 6.1953
+    },
+    {
+      "text": "its",
+      "start": 6.2553,
+      "end": 6.5731
+    },
+    {
+      "text": "start",
+      "start": 6.6331,
+      "end": 7.0377
+    },
+    {
+      "text": "and",
+      "start": 7.0977,
+      "end": 7.4276
+    },
+    {
+      "text": "end",
+      "start": 7.4876,
+      "end": 7.8008
+    },
+    {
+      "text": "time.",
+      "start": 7.8608,
+      "end": 8.2245
+    },
+    {
+      "text": "The",
+      "start": 8.4045,
+      "end": 8.6269
+    },
+    {
+      "text": "short",
+      "start": 8.6869,
+      "end": 9.0658
+    },
+    {
+      "text": "sample",
+      "start": 9.1258,
+      "end": 9.5882
+    },
+    {
+      "text": "also",
+      "start": 9.6482,
+      "end": 10.0664
+    },
+    {
+      "text": "helps",
+      "start": 10.1264,
+      "end": 10.6349
+    },
+    {
+      "text": "check",
+      "start": 10.6949,
+      "end": 10.9987
+    },
+    {
+      "text": "that",
+      "start": 11.0587,
+      "end": 11.3881
+    },
+    {
+      "text": "video",
+      "start": 11.4481,
+      "end": 11.8567
+    },
+    {
+      "text": "and",
+      "start": 11.9167,
+      "end": 12.2466
+    },
+    {
+      "text": "audio",
+      "start": 12.3066,
+      "end": 12.691
+    },
+    {
+      "text": "stay",
+      "start": 12.751,
+      "end": 13.0879
+    },
+    {
+      "text": "aligned.",
+      "start": 13.1479,
+      "end": 13.579
+    },
+    {
+      "text": "All",
+      "start": 13.759,
+      "end": 14.04
+    },
+    {
+      "text": "tests",
+      "start": 14.1,
+      "end": 14.5245
+    },
+    {
+      "text": "can",
+      "start": 14.5845,
+      "end": 14.9205
+    },
+    {
+      "text": "run",
+      "start": 14.9805,
+      "end": 15.3176
+    },
+    {
+      "text": "offline.",
+      "start": 15.3776,
+      "end": 15.7955
+    }
+  ]
+}
