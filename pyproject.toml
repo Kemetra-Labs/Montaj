@@ -3,6 +3,8 @@ name = "montaj"
 version = "0.1.0"
 description = "Prepare reviewed short clips from permitted videos."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = ["pydantic>=2,<3", "typer>=0.16,<1"]
 
