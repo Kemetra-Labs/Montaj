@@ -16,12 +16,13 @@ RUN apt-get update \
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
-RUN uv sync --locked --no-install-project
+RUN uv sync --locked --no-build --no-install-project
 
 COPY README.md LICENSE ./
 COPY src/ ./src/
-RUN uv sync --locked \
-    && uv pip install --no-deps yt-dlp==2026.10.26 \
+RUN uv build --wheel --no-sources --out-dir /tmp/montaj-dist \
+    && uv pip install --no-build --no-deps /tmp/montaj-dist/*.whl yt-dlp==2026.10.26 \
+    && rm -rf /tmp/montaj-dist \
     && install -D -m 644 src/montaj/assets/fonts/NotoSansArabic-Regular.ttf \
         /usr/local/share/fonts/montaj/NotoSansArabic-Regular.ttf \
     && fc-cache -f /usr/local/share/fonts/montaj
