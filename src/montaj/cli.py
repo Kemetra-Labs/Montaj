@@ -4,6 +4,7 @@ import sqlite3
 
 import typer
 
+from montaj.campaigns import campaign_app
 from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.db import SchemaVersionError, connect, init_db
@@ -12,6 +13,7 @@ from montaj.doctor import checks
 app = typer.Typer(no_args_is_help=True)
 db_app = typer.Typer(no_args_is_help=True)
 app.add_typer(db_app, name="db", help="Manage the SQLite database.")
+app.add_typer(campaign_app, name="campaign", help="Manage campaigns and their rules.")
 
 
 @app.callback()
