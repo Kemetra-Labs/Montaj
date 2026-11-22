@@ -12,13 +12,17 @@ import typer
 from pydantic import BaseModel, Field, ValidationError
 
 from montaj.config import Settings
-from montaj.db import connect, fetch, insert
+from montaj.db import connect, fetch, insert, save_source
 from montaj.media import MediaError, file_hash, run_tool
 from montaj.models import Campaign, Niche, Source
 
 
 class SourceError(ValueError):
     """A source is unregistered, incomplete, or lacks permission."""
+
+    def __init__(self, message: str, *, code: int = 1) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class SourceMetadata(BaseModel):
@@ -33,24 +37,63 @@ class Downloader(Protocol):
     def download(self, url: str, destination: Path) -> None: ...
 
 
+def enforce_limits(
+    name: str, duration: float, size_bytes: int, settings: Settings
+) -> None:
+    """Refuse a source that is longer or larger than the configured ceilings."""
+    minutes = duration / 60
+    megabytes = size_bytes / (1024 * 1024)
+    if minutes > settings.max_source_minutes + 1e-8:
+        raise SourceError(
+            f"{name} is {minutes:.1f} minutes; the limit is {settings.max_source_minutes:.0f}.",
+            code=3,
+        )
+    if megabytes > settings.max_source_mb + 1e-8:
+        raise SourceError(
+            f"{name} is {megabytes:.1f} MB; the limit is {settings.max_source_mb:.0f}.",
+            code=3,
+        )
+
+
+def download_failure(detail: str) -> SourceError:
+    """Turn a yt-dlp failure into one plain message. No cookies or logins are added."""
+    folded = detail.casefold()
+    if "private" in folded:
+        reason = "The video is private."
+    elif "age" in folded:
+        reason = "The video is age-restricted."
+    elif "geo" in folded or "not available in your country" in folded:
+        reason = "The video is blocked in this region."
+    elif any(word in folded for word in ("network", "timed out", "temporary failure")):
+        reason = "The download failed because the network was unavailable."
+    elif any(word in folded for word in ("removed", "not found", "404", "unavailable")):
+        reason = "The video was removed or is unavailable."
+    else:
+        reason = "The download failed."
+    return SourceError(reason, code=4)
+
+
 class YtDlpDownloader:
     def download(self, url: str, destination: Path) -> None:
-        run_tool(
-            "yt-dlp",
-            [
-                "--ignore-config",
-                "--no-playlist",
-                "--socket-timeout",
-                "20",
-                "--no-part",
-                "--format",
-                "best[ext=mp4]/best",
-                "--output",
-                str(destination),
-                "--",
-                url,
-            ],
-        )
+        try:
+            run_tool(
+                "yt-dlp",
+                [
+                    "--ignore-config",
+                    "--no-playlist",
+                    "--socket-timeout",
+                    "20",
+                    "--no-part",
+                    "--format",
+                    "best[ext=mp4]/best",
+                    "--output",
+                    str(destination),
+                    "--",
+                    url,
+                ],
+            )
+        except MediaError as exc:
+            raise download_failure(str(exc)) from exc
 
 
 def source_dir(settings: Settings, source_id: int) -> Path:
@@ -132,7 +175,11 @@ def _prepare_video(local_path: Path, video: Path) -> None:
 
 
 def _artifacts(
-    directory: Path, path: Path | None, url: str | None, downloader: Downloader
+    settings: Settings,
+    directory: Path,
+    path: Path | None,
+    url: str | None,
+    downloader: Downloader,
 ) -> SourceMetadata:
     with TemporaryDirectory(prefix=".ingest-", dir=directory) as staging:
         root = Path(staging)
@@ -140,69 +187,97 @@ def _artifacts(
             if url is None:
                 raise SourceError("Enter a video URL or local file.")
             path = root / "download"
-            downloader.download(url, path)
+            try:
+                downloader.download(url, path)
+            except MediaError as exc:
+                raise download_failure(str(exc)) from exc
         video = root / "video.mp4"
         audio = root / "audio.wav"
-        _prepare_video(path, video)
-        run_tool(
-            "ffmpeg",
-            [
-                "-nostdin",
-                "-v",
-                "error",
-                "-y",
-                "-protocol_whitelist",
-                "file,pipe",
-                "-i",
-                str(video),
-                "-map",
-                "0:a:0",
-                "-vn",
-                "-ac",
-                "1",
-                "-ar",
-                "16000",
-                "-c:a",
-                "pcm_s16le",
-                str(audio),
-            ],
-        )
-        probe = json.loads(
-            run_tool(
-                "ffprobe",
-                [
-                    "-v",
-                    "error",
-                    "-protocol_whitelist",
-                    "file,pipe",
-                    "-show_entries",
-                    "stream=codec_type:format=duration:format_tags=title",
-                    "-of",
-                    "json",
-                    str(video),
-                ],
+        try:
+            _prepare_video(path, video)
+            _extract_audio(video, audio)
+            probe = json.loads(
+                run_tool(
+                    "ffprobe",
+                    [
+                        "-v",
+                        "error",
+                        "-protocol_whitelist",
+                        "file,pipe",
+                        "-show_entries",
+                        "stream=codec_type:format=duration:format_tags=title",
+                        "-of",
+                        "json",
+                        str(video),
+                    ],
+                )
             )
-        )
+        except MediaError as exc:
+            raise SourceError(
+                f"{path.name} could not be read as a video.", code=5
+            ) from exc
         if not any(
             stream.get("codec_type") == "video" for stream in probe.get("streams", [])
         ):
-            raise SourceError("The file has no video stream.")
+            raise SourceError(f"{path.name} could not be read as a video.", code=5)
         video_format = probe.get("format", {})
         title = video_format.get("tags", {}).get("title") or (
             path.stem if url is None else urlsplit(url).hostname or "Untitled video"
         )
-        metadata = SourceMetadata(
-            title=title,
-            duration=video_format.get("duration"),
-            url=url,
-            video_hash=file_hash(video),
-            audio_hash=file_hash(audio),
-        )
+        try:
+            metadata = SourceMetadata(
+                title=title,
+                duration=video_format.get("duration"),
+                url=url,
+                video_hash=file_hash(video),
+                audio_hash=file_hash(audio),
+            )
+        except ValidationError as exc:
+            raise SourceError(
+                f"{path.name} could not be read as a video.", code=5
+            ) from exc
+        enforce_limits(path.name, metadata.duration, video.stat().st_size, settings)
         meta = root / "meta.json"
         meta.write_text(metadata.model_dump_json(indent=2) + "\n", encoding="utf-8")
         for artifact in (video, audio, meta):
             artifact.replace(directory / artifact.name)
         return metadata
+
+
+def _extract_audio(video: Path, audio: Path) -> None:
+    run_tool(
+        "ffmpeg",
+        [
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-i",
+            str(video),
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            str(audio),
+        ],
+    )
+
+
+def _mark_failed(settings: Settings, source_id: int, message: str) -> None:
+    with connect(settings.db_path) as db:
+        current = fetch(db, Source, source_id)
+        if current is None:
+            return
+        current.speech_status = "failed"
+        current.failure_note = message
+        save_source(db, current)
 
 
 def ingest_video(
@@ -223,7 +298,8 @@ def ingest_video(
     key, url, path = _identity(location)
     with connect(settings.db_path) as db:
         db.execute("BEGIN IMMEDIATE")
-        if campaign_id is not None and fetch(db, Campaign, campaign_id) is None:
+        campaign = fetch(db, Campaign, campaign_id) if campaign_id is not None else None
+        if campaign_id is not None and campaign is None:
             raise SourceError(f"Campaign {campaign_id} does not exist.")
         row = db.execute("SELECT * FROM sources WHERE input_key = ?", (key,)).fetchone()
         if row is None:
@@ -256,12 +332,28 @@ def ingest_video(
                 f"Source {source.id} is already registered with different source settings."
             )
         if _ready(directory) is not None:
+            if current.speech_status == "failed":
+                current.speech_status = None
+                current.failure_note = None
+            save_source(db, current)
             return source.id, True
         directory.mkdir(parents=True, exist_ok=True)
-        metadata = _artifacts(directory, path, url, downloader or YtDlpDownloader())
-        db.execute(
-            "UPDATE sources SET title = ? WHERE id = ?", (metadata.title, source.id)
+        save_source(db, current)
+    try:
+        metadata = _artifacts(
+            settings, directory, path, url, downloader or YtDlpDownloader()
         )
+    except SourceError as exc:
+        _mark_failed(settings, source.id, str(exc))
+        raise
+    with connect(settings.db_path) as db:
+        current = fetch(db, Source, source.id)
+        if current is None:
+            raise SourceError(f"Source {source.id} disappeared during ingest.")
+        current.title = metadata.title
+        current.speech_status = None
+        current.failure_note = None
+        save_source(db, current)
     return source.id, False
 
 
@@ -277,8 +369,15 @@ def ingest(
     """Import a local video or a permitted video URL."""
     try:
         source_id, reused = ingest_video(
-            Settings.from_env(), location, niche, allowed=allowed, campaign_id=campaign
+            Settings.from_env(),
+            location,
+            niche,
+            allowed=allowed,
+            campaign_id=campaign,
         )
+    except SourceError as exc:
+        typer.echo(f"Ingest failed: {exc}", err=True)
+        raise typer.Exit(exc.code) from exc
     except (MediaError, OSError, ValueError, sqlite3.Error) as exc:
         typer.echo(f"Ingest failed: {exc}", err=True)
         raise typer.Exit(1) from exc

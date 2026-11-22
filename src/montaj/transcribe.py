@@ -38,6 +38,7 @@ class Word(BaseModel):
     start: float = Field(ge=0, allow_inf_nan=False)
     end: float = Field(ge=0, allow_inf_nan=False)
     speaker: int | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
 
     @model_validator(mode="after")
     def validate_time_range(self) -> Self:
@@ -142,6 +143,26 @@ def languages_match(requested: str, detected: str) -> bool:
     return requested_family == detected_family
 
 
+def assess_speech(transcript: Transcript, duration: float) -> str | None:
+    """Return a plain reason when the transcript is too thin to spend more money on."""
+    if not transcript.text.strip() or not transcript.words:
+        return "The transcript is empty."
+    if duration >= 30:
+        words_per_minute = len(transcript.words) / (duration / 60)
+        if words_per_minute < 8:
+            return (
+                f"The transcript has {words_per_minute:.1f} words per minute; "
+                "that is too little speech."
+            )
+    confidences = [
+        word.confidence for word in transcript.words if word.confidence is not None
+    ]
+    if confidences and sum(confidences) / len(confidences) < 0.45:
+        average = sum(confidences) / len(confidences)
+        return f"Transcript confidence {average:.2f} is too low."
+    return None
+
+
 def require_usable_speech(source: Source) -> None:
     """Stop candidates, rank, and draft before they call Claude."""
     if source.speech_status == "language_mismatch":
@@ -172,8 +193,15 @@ def _record_speech(
         if source is None:
             raise SpeechError(f"Source {source_id} does not exist.", code=1)
         source.requested_language = requested
+        mismatch = not languages_match(requested, transcript.language)
+        thin = assess_speech(
+            transcript,
+            audio_duration(
+                settings.data_dir / "sources" / str(source_id) / "audio.wav"
+            ),
+        )
         error: SpeechError | None = None
-        if not force_language and not languages_match(requested, transcript.language):
+        if mismatch and not force_language:
             source.speech_status = "language_mismatch"
             source.failure_note = (
                 f"Requested {requested}, detected {transcript.language}."
@@ -182,6 +210,10 @@ def _record_speech(
                 f"{source.failure_note} No further paid stages will run.",
                 code=7,
             )
+        elif thin:
+            source.speech_status = "no_usable_speech"
+            source.failure_note = thin
+            error = SpeechError(f"{thin} Candidates and rank will not run.", code=6)
         else:
             source.speech_status = "ok"
             source.failure_note = None
