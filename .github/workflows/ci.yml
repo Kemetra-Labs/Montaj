@@ -20,7 +20,9 @@ jobs:
           version: "0.13.3"
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --locked
+      - run: uv sync --locked --no-build --no-install-project
+      - run: uv build --wheel --offline
+      - run: uv pip install --no-build --no-deps dist/*.whl
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync mypy src
