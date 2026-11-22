@@ -9,7 +9,7 @@ from typing import Any
 
 from montaj.models import Account, Campaign, Clip, Earning, Metric, Post, Record, Source
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -142,6 +142,23 @@ _CLIP_MIGRATION = (
     "ALTER TABLE clips ADD COLUMN changed_since_review INTEGER NOT NULL DEFAULT 0",
 )
 
+_COST_MIGRATION = (
+    """CREATE TABLE api_calls (
+        id INTEGER PRIMARY KEY,
+        source_id INTEGER NOT NULL REFERENCES sources(id),
+        stage TEXT NOT NULL,
+        service TEXT NOT NULL CHECK (service IN ('deepgram', 'claude')),
+        input_tokens INTEGER CHECK (input_tokens >= 0),
+        output_tokens INTEGER CHECK (output_tokens >= 0),
+        seconds REAL CHECK (seconds >= 0),
+        estimated_cost_usd REAL NOT NULL CHECK (estimated_cost_usd >= 0),
+        created_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX api_calls_source_stage ON api_calls (source_id, stage)",
+)
+
+_MIGRATIONS = {1: _CLIP_MIGRATION, 2: _COST_MIGRATION}
+
 
 class SchemaVersionError(ValueError):
     """The database schema is newer or older than this build supports."""
@@ -172,11 +189,11 @@ def init_db(path: Path) -> None:
         version = db.execute(
             "SELECT version FROM schema_version WHERE id = 1"
         ).fetchone()[0]
-        if version == 1:
-            for statement in _CLIP_MIGRATION:
+        while version in _MIGRATIONS:
+            for statement in _MIGRATIONS[version]:
                 db.execute(statement)
-            db.execute("UPDATE schema_version SET version = 2 WHERE id = 1")
-            version = 2
+            version += 1
+            db.execute("UPDATE schema_version SET version = ? WHERE id = 1", (version,))
         if version != SCHEMA_VERSION:
             raise SchemaVersionError(
                 f"SQLite schema version {version}, expected {SCHEMA_VERSION}."
