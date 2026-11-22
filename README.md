@@ -151,14 +151,23 @@ uv run montaj review 1
 
 Keys are `a` approve, `r` reject with a one-word reason, `1` or `2` pick a hook, `c` replace the caption, `t` trim by seconds, `u` pick the posting account, `n` skip, and `q` quit. A failed check cannot be approved. A warning asks for `y` before approval and records that confirmation. Trim re-renders that clip and runs the check again. A hook or caption edit runs the check again and returns an approved clip to review.
 
+## Export
+
+`export` copies approved clips into a folder you can upload by hand. It does not post.
+
+```bash
+uv run montaj export --account 1
+```
+
+A clip is copied only when it is approved, its check is a current pass or a confirmed warning, and its source is allowed with a permission basis recorded. Anything else is left in place and the reason is printed. The folder is `data/exports/<UTC date>/<account id>-<handle>/`. Each clip is an `mp4` plus a text file with the chosen hook, caption, and hashtags. `manifest.csv` lists the clip id, file name, platform, campaign, and the time the package was written. Run it again and clips already exported stay as they are. New clips are added to the same day's manifest.
+
 ## Still planned
 
-These commands are not in this build yet:
+This command is not in this build yet:
 
-- `montaj export` packages approved clips whose check is current and whose permission basis is recorded.
 - `montaj post-log` records a post that was published by hand.
 
-Until those commands exist, use `preview` to watch a clip and post by hand only after a person has reviewed it. Do not approve a clip whose check failed.
+Until that command exists, upload an exported clip yourself. Do not post a clip whose check failed.
 
 ## Where files go
 
@@ -174,6 +183,9 @@ data/sources/<source id>/rank.json
 data/clips/<clip id>/raw.mp4
 data/clips/<clip id>/final.mp4
 data/clips/<clip id>/captions.ass
+data/exports/<UTC date>/<account id>-<handle>/<NN>_<slug>.mp4
+data/exports/<UTC date>/<account id>-<handle>/<NN>_<slug>.txt
+data/exports/<UTC date>/<account id>-<handle>/manifest.csv
 ```
 
 ## Rules that never change
