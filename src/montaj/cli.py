@@ -18,6 +18,7 @@ from montaj.draft import draft
 from montaj.ingest import ingest
 from montaj.preview import preview_app
 from montaj.rank import rank
+from montaj.run import run
 from montaj.transcribe import transcribe
 
 app = typer.Typer(no_args_is_help=True)
@@ -34,6 +35,7 @@ app.command("cut")(cut)
 app.command("captions")(captions)
 app.command("draft")(draft)
 app.command("check")(check_clips)
+app.command("run")(run)
 
 
 @app.callback()
