@@ -6,6 +6,7 @@ import typer
 
 from montaj.accounts import account_app
 from montaj.campaigns import campaign_app
+from montaj.candidates import candidates
 from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.db import SchemaVersionError, connect, init_db
@@ -20,6 +21,7 @@ app.add_typer(campaign_app, name="campaign", help="Manage campaigns and their ru
 app.add_typer(account_app, name="account", help="Manage posting accounts.")
 app.command("ingest")(ingest)
 app.command("transcribe")(transcribe)
+app.command("candidates")(candidates)
 
 
 @app.callback()

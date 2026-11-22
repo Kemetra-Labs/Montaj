@@ -35,7 +35,7 @@ class Settings(BaseModel):
     anthropic_api_key: SecretStr | None = None
     deepgram_model: str = "nova-3"
     deepgram_language: str = "en"
-    claude_model: str | None = None
+    claude_model: str = "claude-sonnet-5-5"
     font_path: Path | None = None
     retry: RetrySettings = Field(default_factory=RetrySettings)
     max_cost_per_run_usd: float = Field(default=0.5, ge=0, allow_inf_nan=False)
@@ -68,7 +68,7 @@ class Settings(BaseModel):
             deepgram_model=getenv("MONTAJ_DEEPGRAM_MODEL") or defaults.deepgram_model,
             deepgram_language=getenv("MONTAJ_DEEPGRAM_LANGUAGE")
             or defaults.deepgram_language,
-            claude_model=getenv("MONTAJ_CLAUDE_MODEL") or None,
+            claude_model=getenv("MONTAJ_CLAUDE_MODEL") or defaults.claude_model,
             font_path=Path(font_path) if font_path else None,
             retry=RetrySettings.from_env(),
             max_cost_per_run_usd=float(
