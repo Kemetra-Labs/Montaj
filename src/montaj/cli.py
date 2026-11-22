@@ -15,6 +15,7 @@ from montaj.cut import cut
 from montaj.db import SchemaVersionError, connect, init_db
 from montaj.doctor import checks, online_checks
 from montaj.draft import draft
+from montaj.export import export_clips
 from montaj.ingest import ingest
 from montaj.preview import preview_app
 from montaj.rank import rank
@@ -38,6 +39,7 @@ app.command("draft")(draft)
 app.command("check")(check_clips)
 app.command("run")(run)
 app.command("review")(review)
+app.command("export")(export_clips)
 
 
 @app.callback()

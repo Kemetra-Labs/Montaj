@@ -1,6 +1,7 @@
 /.env
 /.venv/
 /data/
+/exports/
 /dist/
 /tests/generated_media/
 __pycache__/
