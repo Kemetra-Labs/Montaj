@@ -56,7 +56,11 @@ def run_tool(tool: str, args: list[str], *, cwd: Path | None = None) -> str:
             [executable, *args], cwd=cwd, capture_output=True, timeout=1800, check=True
         )
     except subprocess.CalledProcessError as exc:
-        raise MediaError(f"{tool} failed with exit code {exc.returncode}.") from None
+        detail = ""
+        if tool in {"ffmpeg", "ffprobe"} and exc.stderr:
+            detail = exc.stderr.decode("utf-8", errors="replace").strip()[-400:]
+        message = f"{tool} failed with exit code {exc.returncode}."
+        raise MediaError(f"{message} {detail}".strip()) from None
     except subprocess.TimeoutExpired:
         raise MediaError(f"{tool} timed out.") from None
     except OSError as exc:
