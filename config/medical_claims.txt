@@ -1,0 +1,10 @@
+# Phrases that flag a medical claim or a promise of results. One phrase per line.
+cure
+cures
+guaranteed
+miracle
+no side effects
+clinically proven
+lose weight fast
+will heal
+treatment works

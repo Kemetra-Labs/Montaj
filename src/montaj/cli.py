@@ -8,6 +8,7 @@ from montaj.accounts import account_app
 from montaj.campaigns import campaign_app
 from montaj.candidates import candidates
 from montaj.captions import captions
+from montaj.check import check as check_clips
 from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.cut import cut
@@ -30,6 +31,7 @@ app.command("rank")(rank)
 app.command("cut")(cut)
 app.command("captions")(captions)
 app.command("draft")(draft)
+app.command("check")(check_clips)
 
 
 @app.callback()
