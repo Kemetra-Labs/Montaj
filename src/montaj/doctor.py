@@ -22,6 +22,7 @@ from montaj.housekeeping import disk_free
 
 # Stable yt-dlp release. Nightly builds are not accepted as the pin.
 YT_DLP_PIN = "2026.10.26"
+YT_DLP_EJS_PIN = "0.8.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,8 +58,60 @@ def _yt_dlp() -> Check:
     return Check(
         check.name,
         True,
-        f"{check.detail} (pinned {YT_DLP_PIN}; update with: yt-dlp -U)",
+        f"{check.detail} (pinned {YT_DLP_PIN}; reinstall the pinned release or rebuild the image)",
         warning=True,
+    )
+
+
+def _youtube_dependencies() -> tuple[Check, Check]:
+    executable = shutil.which("yt-dlp")
+    diagnostics: dict[str, str] = {}
+    if executable is not None:
+        try:
+            # This list command initializes yt-dlp and reports dependencies without a URL.
+            result = subprocess.run(
+                [
+                    executable,
+                    "--ignore-config",
+                    "--no-plugin-dirs",
+                    "--verbose",
+                    "--list-impersonate-targets",
+                ],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+                check=True,
+            )
+            for line in result.stderr.splitlines():
+                key, _, value = line.partition(": ")
+                if key in {"[debug] JS runtimes", "[debug] Optional libraries"}:
+                    diagnostics[key] = value
+        except (OSError, subprocess.SubprocessError):
+            pass
+    runtimes = diagnostics.get("[debug] JS runtimes", "").split(", ")
+    deno = any(
+        runtime.startswith("deno-") and "(" not in runtime for runtime in runtimes
+    )
+    libraries = diagnostics.get("[debug] Optional libraries", "").split(", ")
+    solver = f"yt_dlp_ejs-{YT_DLP_EJS_PIN}" in libraries
+    return (
+        Check(
+            "YouTube runtime",
+            True,
+            "Deno detected"
+            if deno
+            else "Supported Deno was not detected. Install Deno or rebuild the Montaj image.",
+            warning=not deno,
+        ),
+        Check(
+            "YouTube EJS",
+            True,
+            f"solver detected ({YT_DLP_EJS_PIN})"
+            if solver
+            else f"Pinned solver was not detected. Install yt-dlp-ejs {YT_DLP_EJS_PIN} with yt-dlp or rebuild the Montaj image.",
+            warning=not solver,
+        ),
     )
 
 
@@ -120,6 +173,7 @@ def checks(
         _tool("ffmpeg", "-version"),
         _tool("ffprobe", "-version"),
         _yt_dlp(),
+        *_youtube_dependencies(),
     ]
     for name, secret in (
         ("DEEPGRAM_API_KEY", settings.deepgram_api_key),

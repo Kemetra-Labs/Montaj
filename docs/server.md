@@ -121,10 +121,13 @@ uv run montaj clean --older-than-days 14
 
 Each command that writes a source or its clips takes `data/sources/<source id>/.lock`. The lock is an OS file lock, so it is released when the process exits, including after a crash. A second command prints the holding command and its start time, then exits non-zero. `--wait 30` on that command, or on `montaj run`, waits up to 30 seconds. `montaj run` holds the lock once for the whole run. `costs`, `doctor`, and the list commands do not take it.
 
-## yt-dlp
+## YouTube ingestion
 
-Pinned version: `2026.10.26`. `montaj doctor` prints the installed version and warns when it is not that release. Update with one command:
+The Docker image includes yt-dlp `2026.10.26`, yt-dlp-ejs `0.8.0`, and Deno `2.9.8`. For a native install, put Deno on `PATH` and install the two pinned Python packages into the same environment as the `yt-dlp` executable. An official yt-dlp executable at the pinned release already bundles EJS.
 
 ```bash
-yt-dlp -U
+uv tool install 'yt-dlp==2026.10.26' --with 'yt-dlp-ejs==0.8.0'
+montaj doctor
 ```
+
+Doctor checks local discovery without contacting YouTube. For an opt-in format probe, dependency update policy, and source recovery commands, see [YouTube ingest engineering lessons](engineering/youtube-ingest-lessons.md).

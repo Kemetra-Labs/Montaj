@@ -25,6 +25,14 @@ def test_doctor_reports_versions_and_redacts_secrets(
     monkeypatch.setattr(doctor.shutil, "which", lambda command: f"/test/{command}")
 
     def version(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if "--verbose" in args:
+            assert "--ignore-config" in args
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                "",
+                "[debug] Optional libraries: yt_dlp_ejs-0.8.0\n[debug] JS runtimes: deno-2.9.8\n",
+            )
         return subprocess.CompletedProcess(args, 0, f"{Path(args[0]).name} 1.2.3\n", "")
 
     def offline(request: Request, timeout: float) -> object:
@@ -37,12 +45,36 @@ def test_doctor_reports_versions_and_redacts_secrets(
     for name in ("ffmpeg", "ffprobe", "yt-dlp"):
         assert f"{name}: {name} 1.2.3" in result.output
     assert "pinned 2026.10.26" in result.output
-    assert "yt-dlp -U" in result.output
+    assert "rebuild" in result.output
+    assert "YouTube runtime: Deno detected" in result.output
+    assert "YouTube EJS: solver detected" in result.output
     for name in ("DEEPGRAM_API_KEY", "ANTHROPIC_API_KEY"):
         assert f"{name}: set" in result.output
     assert "secret-value" not in result.output
     assert "SQLite: schema version" in result.output
     assert Settings().resolved_font_path.name in result.output
+
+
+def test_doctor_warns_when_youtube_dependencies_are_missing(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "offline")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "offline")
+    monkeypatch.setattr(doctor.shutil, "which", lambda command: command)
+    monkeypatch.setattr(
+        doctor.subprocess,
+        "run",
+        lambda args, **kwargs: subprocess.CompletedProcess(
+            args,
+            0,
+            "2026.10.26\n",
+            "[debug] Optional libraries: none\n[debug] JS runtimes: none\n",
+        ),
+    )
+    result = CliRunner().invoke(app, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "WARN  YouTube runtime" in result.output
+    assert "WARN  YouTube EJS" in result.output
 
 
 def test_doctor_reports_missing_inputs(

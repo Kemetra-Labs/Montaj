@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -164,7 +164,13 @@ def _busy_message(lock_path: Path) -> str:
     return fallback
 
 
-def run_tool(tool: str, args: list[str], *, cwd: Path | None = None) -> str:
+def run_tool(
+    tool: str,
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    error_message: Callable[[str], str] | None = None,
+) -> str:
     executable = shutil.which(tool)
     if executable is None:
         raise MediaError(f"Install {tool} and add it to PATH.")
@@ -173,13 +179,17 @@ def run_tool(tool: str, args: list[str], *, cwd: Path | None = None) -> str:
             [executable, *args], cwd=cwd, capture_output=True, timeout=1800, check=True
         )
     except subprocess.CalledProcessError as exc:
+        if error_message is not None:
+            stderr = (exc.stderr or b"").decode("utf-8", errors="replace")
+            raise MediaError(error_message(stderr)) from None
         detail = ""
         if tool in {"ffmpeg", "ffprobe"} and exc.stderr:
             detail = exc.stderr.decode("utf-8", errors="replace").strip()[-400:]
         message = f"{tool} failed with exit code {exc.returncode}."
         raise MediaError(f"{message} {detail}".strip()) from None
     except subprocess.TimeoutExpired:
-        raise MediaError(f"{tool} timed out.") from None
+        message = f"{tool} timed out."
+        raise MediaError(error_message(message) if error_message else message) from None
     except OSError as exc:
         raise MediaError(f"Could not start {tool}.") from exc
     return result.stdout.decode("utf-8", errors="replace")

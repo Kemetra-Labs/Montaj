@@ -86,7 +86,7 @@ uv run montaj run 1 --until check
 - Python 3.12
 - [uv](https://docs.astral.sh/uv/)
 - `ffmpeg` and `ffprobe` on `PATH`
-- `yt-dlp` `2026.10.26` on `PATH` (only for video URLs; a local file does not need it). Update with `yt-dlp -U`.
+- For video URLs, `yt-dlp` `2026.10.26` on `PATH`. YouTube also needs Deno and the matching EJS solver in the yt-dlp installation. See the [server setup](docs/server.md#youtube-ingestion). Local-file ingest needs only the media tools.
 
 ### Install and set up
 
@@ -99,7 +99,7 @@ uv run montaj doctor
 
 Run commands as `uv run montaj ...`.
 
-`doctor` stays offline: it checks tools, keys (set or missing, never the value), the data directory, the database schema, the caption font, and free space. `doctor --online` sends one one-second silent clip to Deepgram and one one-token request to Claude, prints `OK`/`FAIL` per service, and costs under a cent.
+`doctor` stays offline. It checks tools, YouTube dependency discovery, key presence, the data directory, the database schema, the caption font, and free space. YouTube dependency warnings apply to URL ingestion. `doctor --online` sends one one-second silent clip to Deepgram and one one-token request to Claude, prints `OK`/`FAIL` per service, and costs under a cent.
 
 ### Configuration
 
@@ -131,7 +131,7 @@ docker compose run --rm montaj --help
 docker compose run --rm montaj db init
 ```
 
-The container runs as the non-root `montaj` user. The bind mount maps `/app/data` to `data\` in the checkout. SQLite, source videos, generated clips, preview copies, and exports survive `--rm` and image rebuilds. Compose fixes the container's `MONTAJ_DATA_DIR` to this mount. Use Linux paths such as `data/inbox/interview.mp4` in container commands.
+The container runs as the non-root `montaj` user and includes pinned yt-dlp, EJS, and Deno. Rebuild the image to apply downloader dependency changes. The bind mount maps `/app/data` to `data\` in the checkout. SQLite, source videos, generated clips, preview copies, and exports survive `--rm` and image rebuilds. Compose fixes the container's `MONTAJ_DATA_DIR` to this mount. Use Linux paths such as `data/inbox/interview.mp4` in container commands.
 
 To check offline without entering real credentials, run `doctor` with placeholder values. The command checks credential presence and the local tools, database, font, and storage. The test command clears both keys and requires FFmpeg so media tests cannot silently skip it.
 
