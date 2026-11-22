@@ -11,7 +11,7 @@
 ![posting](https://img.shields.io/badge/posting-manual%20by%20design-lightgrey)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-[Features](#-features) · [Pipeline](#-pipeline) · [Quick start](#-quick-start) · [Commands](#-commands) · [Safety rules](#-rules-that-never-change) · [Roadmap](#-roadmap)
+[Features](#-features) · [Pipeline](#-pipeline) · [Quick start](#-quick-start) · [Docker Desktop](#windows-pilot-with-docker-desktop) · [Commands](#-commands) · [Safety rules](#-rules-that-never-change) · [Roadmap](#-roadmap)
 
 </div>
 
@@ -120,6 +120,43 @@ Run commands as `uv run montaj ...`.
 | `MONTAJ_CLEAN_OLDER_THAN_DAYS` | Default age for `clean` | `14` |
 
 Paid stages stop **before** the request when the next call would pass either cost ceiling. `--budget 1.00` overrides both ceilings for that command.
+
+### Windows pilot with Docker Desktop
+
+Install and start [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/) with the WSL 2 backend and Linux containers. Open PowerShell in the Montaj checkout. `docker version` should show a Linux server, and Compose must be version 2.24 or later.
+
+```powershell
+docker compose build
+docker compose run --rm montaj --help
+docker compose run --rm montaj db init
+```
+
+The container runs as the non-root `montaj` user. The bind mount maps `/app/data` to `data\` in the checkout. SQLite, source videos, generated clips, preview copies, and exports survive `--rm` and image rebuilds. Compose fixes the container's `MONTAJ_DATA_DIR` to this mount. Use Linux paths such as `data/inbox/interview.mp4` in container commands.
+
+To check offline without entering real credentials, run `doctor` with placeholder values. The command checks credential presence and the local tools, database, font, and storage. The test command clears both keys and requires FFmpeg so media tests cannot silently skip it.
+
+```powershell
+docker compose run --rm -e DEEPGRAM_API_KEY=offline -e ANTHROPIC_API_KEY=offline montaj doctor
+docker compose run --rm -e DEEPGRAM_API_KEY= -e ANTHROPIC_API_KEY= -e MONTAJ_REQUIRE_FFMPEG=1 --entrypoint python montaj -m pytest -p no:cacheprovider
+```
+
+For the pilot, copy `.env.example` to `.env` if there is no `.env` already, then fill in `ANTHROPIC_API_KEY` and `DEEPGRAM_API_KEY`. Compose reads `.env` at runtime. Keep it out of Git and use `docker compose config --quiet` to validate Compose without printing the resolved configuration. Get explicit approval before running any paid call. After approval, `docker compose run --rm montaj doctor --online` sends one request to each provider under the existing smoke-test budget.
+
+Place a permitted local video in `data\inbox\interview.mp4`, creating the `inbox` folder first. The ingest command prints the source ID for subsequent commands. Use the same ID after recreating the container.
+
+```powershell
+docker compose run --rm montaj ingest data/inbox/interview.mp4 --niche games --allowed --basis 'creator written permission'
+```
+
+After the pipeline has rendered clips, open a clip directly from `data\clips\<clip id>\final.mp4` in Windows, or export a preview page for the source. This example uses source ID `1`.
+
+```powershell
+docker compose run --rm montaj preview export 1
+Invoke-Item .\data\preview\1\index.html
+docker compose run --rm montaj review 1
+```
+
+The preview opens from disk and Compose publishes no ports. Review each clip in `review` before exporting it for manual posting.
 
 ## 🛠 Commands
 
