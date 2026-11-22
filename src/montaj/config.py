@@ -3,7 +3,26 @@
 from os import getenv
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
+
+
+class RetrySettings(BaseModel):
+    attempts: int = Field(default=4, ge=1, le=20)
+    base_delay: float = Field(default=1.0, ge=0, allow_inf_nan=False)
+    max_delay: float = Field(default=30.0, ge=0, allow_inf_nan=False)
+
+    @classmethod
+    def from_env(cls) -> "RetrySettings":
+        values = {
+            field: value
+            for field, name in (
+                ("attempts", "MONTAJ_API_ATTEMPTS"),
+                ("base_delay", "MONTAJ_API_BASE_DELAY"),
+                ("max_delay", "MONTAJ_API_MAX_DELAY"),
+            )
+            if (value := getenv(name))
+        }
+        return cls.model_validate(values)
 
 
 class Settings(BaseModel):
@@ -17,6 +36,7 @@ class Settings(BaseModel):
     deepgram_model: str = "nova-3"
     claude_model: str | None = None
     font_path: Path | None = None
+    retry: RetrySettings = Field(default_factory=RetrySettings)
 
     @property
     def db_path(self) -> Path:
@@ -37,4 +57,5 @@ class Settings(BaseModel):
             deepgram_model=getenv("MONTAJ_DEEPGRAM_MODEL") or defaults.deepgram_model,
             claude_model=getenv("MONTAJ_CLAUDE_MODEL") or None,
             font_path=Path(font_path) if font_path else None,
+            retry=RetrySettings.from_env(),
         )
