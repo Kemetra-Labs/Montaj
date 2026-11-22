@@ -17,6 +17,7 @@ from montaj.doctor import checks, online_checks
 from montaj.draft import draft
 from montaj.export import export_clips
 from montaj.ingest import ingest
+from montaj.post_log import post_log_app
 from montaj.preview import preview_app
 from montaj.rank import rank
 from montaj.review import review
@@ -29,6 +30,9 @@ app.add_typer(db_app, name="db", help="Manage the SQLite database.")
 app.add_typer(campaign_app, name="campaign", help="Manage campaigns and their rules.")
 app.add_typer(account_app, name="account", help="Manage posting accounts.")
 app.add_typer(preview_app, name="preview")
+app.add_typer(
+    post_log_app, name="post-log", help="Record posts that were published by hand."
+)
 app.command("ingest")(ingest)
 app.command("transcribe")(transcribe)
 app.command("candidates")(candidates)
