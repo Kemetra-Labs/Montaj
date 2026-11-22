@@ -105,6 +105,12 @@ Each command takes a source id printed by ingest. A finished stage is reused whe
 
 `cut`, `captions`, `draft`, and `check` accept `--clip` to limit the command to one clip.
 
+`run` calls those stages in order for one source: transcribe, candidates, rank, cut, captions, draft, check. It skips a stage whose output is already current, stops at the first failure, and resumes there on the next run. It never reviews, exports, or posts. `--until captions` stops after captions. `--campaign` is passed to rank. `--budget` overrides both spending ceilings for the whole run, so every paid stage in that run shares one ceiling.
+
+```bash
+uv run montaj run 1 --until check
+```
+
 ```bash
 uv run montaj costs
 ```
@@ -139,12 +145,11 @@ The folder defaults to `data/preview/1/`. `--dest` picks another folder. Files o
 
 These commands are not in this build yet:
 
-- `montaj run` walks transcribe through check for one source and stops at the first failure.
 - `montaj review` shows the next clip in the terminal. A person approves or rejects. A failed check cannot be approved.
 - `montaj export` packages approved clips whose check is current and whose permission basis is recorded.
 - `montaj post-log` records a post that was published by hand.
 
-Until those commands exist, post by hand only after a person has reviewed the clip. Do not approve a clip whose check failed.
+Until those commands exist, use `preview` to watch a clip and post by hand only after a person has reviewed it. Do not approve a clip whose check failed.
 
 ## Where files go
 
