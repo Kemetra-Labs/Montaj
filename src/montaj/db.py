@@ -1,13 +1,15 @@
 """SQLite connections, schema setup, and record persistence."""
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from montaj.models import Account, Campaign, Clip, Earning, Metric, Post, Record, Source
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -104,9 +106,13 @@ _QUERIES: dict[type[Record], tuple[str, str]] = {
     ),
     Clip: (
         """INSERT INTO clips (id, source_id, start_s, end_s, moment_type, score, hook_text,
-           hook_style, caption, raw_path, final_path, status) VALUES (:id, :source_id,
+           hook_style, caption, raw_path, final_path, status, input_hashes, draft_quotes_clip,
+           check_result, check_input_hash, reviewed_at, reviewed_input_hash, changed_since_review)
+           VALUES (:id, :source_id,
            :start_s, :end_s, :moment_type, :score, :hook_text, :hook_style,
-           :caption, :raw_path, :final_path, :status) RETURNING *""",
+           :caption, :raw_path, :final_path, :status, :input_hashes, :draft_quotes_clip,
+           :check_result, :check_input_hash, :reviewed_at, :reviewed_input_hash,
+           :changed_since_review) RETURNING *""",
         "SELECT * FROM clips WHERE id = ?",
     ),
     Post: (
@@ -125,6 +131,16 @@ _QUERIES: dict[type[Record], tuple[str, str]] = {
         "SELECT * FROM earnings WHERE id = ?",
     ),
 }
+
+_CLIP_MIGRATION = (
+    "ALTER TABLE clips ADD COLUMN input_hashes TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE clips ADD COLUMN draft_quotes_clip INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE clips ADD COLUMN check_result TEXT CHECK (check_result IN ('pass', 'warn', 'fail'))",
+    "ALTER TABLE clips ADD COLUMN check_input_hash TEXT",
+    "ALTER TABLE clips ADD COLUMN reviewed_at TEXT",
+    "ALTER TABLE clips ADD COLUMN reviewed_input_hash TEXT",
+    "ALTER TABLE clips ADD COLUMN changed_since_review INTEGER NOT NULL DEFAULT 0",
+)
 
 
 class SchemaVersionError(ValueError):
@@ -151,22 +167,34 @@ def init_db(path: Path) -> None:
         db.executescript(_SCHEMA)
         db.execute(
             "INSERT INTO schema_version (id, version) VALUES (1, ?) ON CONFLICT DO NOTHING",
-            (SCHEMA_VERSION,),
+            (1,),
         )
         version = db.execute(
             "SELECT version FROM schema_version WHERE id = 1"
         ).fetchone()[0]
+        if version == 1:
+            for statement in _CLIP_MIGRATION:
+                db.execute(statement)
+            db.execute("UPDATE schema_version SET version = 2 WHERE id = 1")
+            version = 2
         if version != SCHEMA_VERSION:
             raise SchemaVersionError(
                 f"SQLite schema version {version}, expected {SCHEMA_VERSION}."
             )
 
 
+def _record_values(record: Record) -> dict[str, Any]:
+    values = record.model_dump(mode="json")
+    if isinstance(record, Clip):
+        values["input_hashes"] = json.dumps(values["input_hashes"], sort_keys=True)
+    return values
+
+
 def insert[T: Record](db: sqlite3.Connection, record: T) -> T:
     """Insert a typed record and return it with its database-assigned ID."""
     model = type(record)
     insert_sql, _ = _QUERIES[model]
-    row = db.execute(insert_sql, record.model_dump(mode="json")).fetchone()
+    row = db.execute(insert_sql, _record_values(record)).fetchone()
     return model.model_validate(dict(row))
 
 
@@ -177,3 +205,20 @@ def fetch[T: Record](
     _, select_sql = _QUERIES[model]
     row = db.execute(select_sql, (record_id,)).fetchone()
     return model.model_validate(dict(row)) if row is not None else None
+
+
+def save_clip(db: sqlite3.Connection, clip: Clip) -> None:
+    """Persist a clip's stage outputs and review state together."""
+    updated = db.execute(
+        """UPDATE clips SET start_s = :start_s, end_s = :end_s, moment_type = :moment_type,
+           score = :score, hook_text = :hook_text, hook_style = :hook_style, caption = :caption,
+           raw_path = :raw_path, final_path = :final_path, status = :status,
+           input_hashes = :input_hashes, draft_quotes_clip = :draft_quotes_clip,
+           check_result = :check_result, check_input_hash = :check_input_hash,
+           reviewed_at = :reviewed_at, reviewed_input_hash = :reviewed_input_hash,
+           changed_since_review = :changed_since_review WHERE id = :id AND source_id = :source_id
+        """,
+        _record_values(clip),
+    )
+    if updated.rowcount != 1:
+        raise ValueError(f"Clip {clip.id} does not exist for source {clip.source_id}.")
