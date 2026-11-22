@@ -141,11 +141,20 @@ uv run montaj preview export 1
 
 The folder defaults to `data/preview/1/`. `--dest` picks another folder. Files outside the data directory are refused.
 
+## Review
+
+`review` is the approval step. It prints the rendered path, the loopback preview address, the permission basis, the transcript, both hooks, the caption, and the check. It does not post.
+
+```bash
+uv run montaj review 1
+```
+
+Keys are `a` approve, `r` reject with a one-word reason, `1` or `2` pick a hook, `c` replace the caption, `t` trim by seconds, `u` pick the posting account, `n` skip, and `q` quit. A failed check cannot be approved. A warning asks for `y` before approval and records that confirmation. Trim re-renders that clip and runs the check again. A hook or caption edit runs the check again and returns an approved clip to review.
+
 ## Still planned
 
 These commands are not in this build yet:
 
-- `montaj review` shows the next clip in the terminal. A person approves or rejects. A failed check cannot be approved.
 - `montaj export` packages approved clips whose check is current and whose permission basis is recorded.
 - `montaj post-log` records a post that was published by hand.
 

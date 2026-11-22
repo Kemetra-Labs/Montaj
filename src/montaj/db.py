@@ -9,7 +9,7 @@ from typing import Any
 
 from montaj.models import Account, Campaign, Clip, Earning, Metric, Post, Record, Source
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 _SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -107,16 +107,16 @@ _QUERIES: dict[type[Record], tuple[str, str]] = {
         "SELECT * FROM sources WHERE id = ?",
     ),
     Clip: (
-        """INSERT INTO clips (id, source_id, start_s, end_s, moment_type, score, hook_text,
-           hook_style, hook_a, hook_a_style, hook_b, hook_b_style, hashtags, chosen_hook,
-           caption, raw_path, final_path, status, input_hashes, draft_quotes_clip,
+        """INSERT INTO clips (id, source_id, account_id, start_s, end_s, moment_type, score,
+           hook_text, hook_style, hook_a, hook_a_style, hook_b, hook_b_style, hashtags,
+           chosen_hook, caption, raw_path, final_path, status, input_hashes, draft_quotes_clip,
            check_result, check_input_hash, reviewed_at, reviewed_input_hash, changed_since_review,
            decision_reason)
-           VALUES (:id, :source_id, :start_s, :end_s, :moment_type, :score, :hook_text,
-           :hook_style, :hook_a, :hook_a_style, :hook_b, :hook_b_style, :hashtags, :chosen_hook,
-           :caption, :raw_path, :final_path, :status, :input_hashes, :draft_quotes_clip,
-           :check_result, :check_input_hash, :reviewed_at, :reviewed_input_hash,
-           :changed_since_review, :decision_reason) RETURNING *""",
+           VALUES (:id, :source_id, :account_id, :start_s, :end_s, :moment_type, :score,
+           :hook_text, :hook_style, :hook_a, :hook_a_style, :hook_b, :hook_b_style, :hashtags,
+           :chosen_hook, :caption, :raw_path, :final_path, :status, :input_hashes,
+           :draft_quotes_clip, :check_result, :check_input_hash, :reviewed_at,
+           :reviewed_input_hash, :changed_since_review, :decision_reason) RETURNING *""",
         "SELECT * FROM clips WHERE id = ?",
     ),
     Post: (
@@ -221,6 +221,7 @@ _MIGRATIONS = {
         "CREATE INDEX api_calls_source_stage ON api_calls (source_id, stage)",
         "CREATE INDEX api_calls_run ON api_calls (run_id)",
     ),
+    11: ("ALTER TABLE clips ADD COLUMN account_id INTEGER REFERENCES accounts(id)",),
 }
 
 
@@ -307,7 +308,8 @@ def save_source(db: sqlite3.Connection, source: Source) -> None:
 def save_clip(db: sqlite3.Connection, clip: Clip) -> None:
     """Persist a clip's stage outputs and review state together."""
     updated = db.execute(
-        """UPDATE clips SET start_s = :start_s, end_s = :end_s, moment_type = :moment_type,
+        """UPDATE clips SET account_id = :account_id, start_s = :start_s, end_s = :end_s,
+           moment_type = :moment_type,
            score = :score, hook_text = :hook_text, hook_style = :hook_style,
            hook_a = :hook_a, hook_a_style = :hook_a_style, hook_b = :hook_b,
            hook_b_style = :hook_b_style, hashtags = :hashtags, chosen_hook = :chosen_hook,
