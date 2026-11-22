@@ -20,6 +20,10 @@ from montaj.models import utc_now
 class ExternalCallError(RuntimeError):
     """Safe, user-facing error from a paid service call."""
 
+    def __init__(self, message: str, *, http_status: int | None = None) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+
 
 @dataclass(frozen=True, slots=True)
 class CallContext:
@@ -31,6 +35,7 @@ class CallContext:
     budget: Budget = field(
         default_factory=lambda: Budget.from_settings(Settings.from_env())
     )
+    nonretryable_http: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +50,7 @@ class _Failure:
     retry: bool = False
     retry_after: str | None = None
     may_bill: bool = False
+    http_status: int | None = None
 
 
 def _http_failure(error: HTTPError) -> _Failure:
@@ -69,7 +75,9 @@ def _http_failure(error: HTTPError) -> _Failure:
     if status in (401, 403):
         return _Failure(f"authentication or permissions failed (HTTP {status})")
     if status == 429 or 500 <= status < 600:
-        return _Failure(f"temporary HTTP {status}", True, retry_after, status >= 500)
+        return _Failure(
+            f"temporary HTTP {status}", True, retry_after, status >= 500, status
+        )
     return _Failure(f"request failed (HTTP {status})")
 
 
@@ -171,9 +179,14 @@ def call_external[T](
             estimate if failure.may_bill else 0.0,
             "failure",
         )
-        if not failure.retry or attempt + 1 == settings.attempts:
+        if (
+            not failure.retry
+            or failure.http_status in context.nonretryable_http
+            or attempt + 1 == settings.attempts
+        ):
             raise ExternalCallError(
-                f"{context.service} {context.stage}: {failure.reason}."
+                f"{context.service} {context.stage}: {failure.reason}.",
+                http_status=failure.http_status,
             )
         backoff = min(settings.max_delay, settings.base_delay * 2**attempt)
         sleep(

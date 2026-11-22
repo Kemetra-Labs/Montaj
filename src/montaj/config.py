@@ -34,6 +34,7 @@ class Settings(BaseModel):
     deepgram_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     deepgram_model: str = "nova-3"
+    deepgram_language: str = "en"
     claude_model: str | None = None
     font_path: Path | None = None
     retry: RetrySettings = Field(default_factory=RetrySettings)
@@ -65,6 +66,8 @@ class Settings(BaseModel):
             deepgram_api_key=SecretStr(deepgram_key) if deepgram_key else None,
             anthropic_api_key=SecretStr(anthropic_key) if anthropic_key else None,
             deepgram_model=getenv("MONTAJ_DEEPGRAM_MODEL") or defaults.deepgram_model,
+            deepgram_language=getenv("MONTAJ_DEEPGRAM_LANGUAGE")
+            or defaults.deepgram_language,
             claude_model=getenv("MONTAJ_CLAUDE_MODEL") or None,
             font_path=Path(font_path) if font_path else None,
             retry=RetrySettings.from_env(),

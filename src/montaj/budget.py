@@ -1,5 +1,6 @@
 """Reserve estimated spend before each paid attempt."""
 
+import math
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Annotated
@@ -26,6 +27,12 @@ class Budget:
     per_run: float
     per_source: float
     run_id: str = field(default_factory=lambda: uuid4().hex)
+
+    def __post_init__(self) -> None:
+        if any(
+            not math.isfinite(cap) or cap < 0 for cap in (self.per_run, self.per_source)
+        ):
+            raise ValueError("Budget ceilings must be finite, non-negative amounts.")
 
     @classmethod
     def from_settings(
