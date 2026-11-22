@@ -3,8 +3,16 @@
 import json
 from datetime import UTC, date, datetime
 from enum import StrEnum
+from typing import Annotated, Self
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 
 def utc_now() -> datetime:
@@ -27,6 +35,27 @@ class Record(BaseModel):
     id: int | None = None
 
 
+RuleText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class CampaignRules(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_seconds: float = Field(gt=0, allow_inf_nan=False)
+    max_seconds: float = Field(gt=0, allow_inf_nan=False)
+    banned_topics: list[RuleText] = Field(default_factory=list)
+    banned_words: list[RuleText] = Field(default_factory=list)
+    required_hashtags: list[RuleText] = Field(default_factory=list)
+    flag_medical_claims: bool = False
+    source_must_be_allowed: bool = True
+
+    @model_validator(mode="after")
+    def check_duration_range(self) -> Self:
+        if self.max_seconds < self.min_seconds:
+            raise ValueError("max_seconds must be at least min_seconds")
+        return self
+
+
 class Campaign(Record):
     name: str
     platform: Platform
@@ -35,6 +64,10 @@ class Campaign(Record):
     rate_per_1k: float | None = Field(default=None, ge=0)
     min_views: int | None = Field(default=None, ge=0)
     cap: float | None = Field(default=None, ge=0)
+
+    @property
+    def rules(self) -> CampaignRules:
+        return CampaignRules.model_validate_json(self.rules_json)
 
 
 class Account(Record):
