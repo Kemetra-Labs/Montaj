@@ -9,7 +9,7 @@ from typing import Any
 
 from montaj.models import Account, Campaign, Clip, Earning, Metric, Post, Record, Source
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 _SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -100,8 +100,8 @@ _QUERIES: dict[type[Record], tuple[str, str]] = {
     ),
     Source: (
         """INSERT INTO sources (id, url, path, title, niche, campaign_id, source_allowed,
-           added_at) VALUES (:id, :url, :path, :title, :niche, :campaign_id,
-           :source_allowed, :added_at) RETURNING *""",
+           added_at, input_key) VALUES (:id, :url, :path, :title, :niche, :campaign_id,
+           :source_allowed, :added_at, :input_key) RETURNING *""",
         "SELECT * FROM sources WHERE id = ?",
     ),
     Clip: (
@@ -168,6 +168,10 @@ _MIGRATIONS = {
     2: _COST_MIGRATION,
     3: _BUDGET_MIGRATION,
     4: ("ALTER TABLE accounts ADD COLUMN style_notes TEXT",),
+    5: (
+        "ALTER TABLE sources ADD COLUMN input_key TEXT",
+        "CREATE UNIQUE INDEX sources_input_key ON sources(input_key)",
+    ),
 }
 
 
