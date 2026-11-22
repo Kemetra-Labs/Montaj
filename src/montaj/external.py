@@ -4,13 +4,14 @@ import json
 import random
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
-from montaj.config import RetrySettings
+from montaj.budget import Budget, check_budget
+from montaj.config import RetrySettings, Settings
 from montaj.costs import Service, Usage, estimate_cost, log_api_call
 from montaj.db import connect
 from montaj.models import utc_now
@@ -27,6 +28,9 @@ class CallContext:
     stage: str
     service: Service
     model: str
+    budget: Budget = field(
+        default_factory=lambda: Budget.from_settings(Settings.from_env())
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,9 +102,37 @@ def _delay(
     return fallback
 
 
-def _record(context: CallContext, usage: Usage, cost: float) -> None:
+def _reserve(context: CallContext, usage: Usage, estimate: float) -> int:
     with connect(context.db_path) as db:
-        log_api_call(db, context.source_id, context.stage, context.service, usage, cost)
+        db.execute("BEGIN IMMEDIATE")
+        check_budget(db, context.budget, context.source_id, context.stage, estimate)
+        return log_api_call(
+            db,
+            context.source_id,
+            context.stage,
+            context.service,
+            usage,
+            estimate,
+            reservation=context.budget.run_id,
+        )
+
+
+def _settle(
+    context: CallContext, call_id: int, usage: Usage, cost: float, outcome: str
+) -> None:
+    with connect(context.db_path) as db:
+        db.execute(
+            """UPDATE api_calls SET input_tokens = ?, output_tokens = ?, seconds = ?,
+               estimated_cost_usd = ?, outcome = ? WHERE id = ?""",
+            (
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.seconds,
+                cost,
+                outcome,
+                call_id,
+            ),
+        )
 
 
 def call_external[T](
@@ -117,22 +149,27 @@ def call_external[T](
     settings = policy or RetrySettings()
     estimate = estimate_cost(context.service, context.model, estimated_usage)
     for attempt in range(settings.attempts):
+        call_id = _reserve(context, estimated_usage, estimate)
         try:
             result = fn()
         except Exception as exc:
             failure = _classify(exc)
         else:
-            _record(
+            _settle(
                 context,
+                call_id,
                 result.usage,
                 estimate_cost(context.service, context.model, result.usage),
+                "success",
             )
             return result.value
 
-        _record(
+        _settle(
             context,
+            call_id,
             estimated_usage if failure.may_bill else Usage(),
             estimate if failure.may_bill else 0.0,
+            "failure",
         )
         if not failure.retry or attempt + 1 == settings.attempts:
             raise ExternalCallError(

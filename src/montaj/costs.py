@@ -49,10 +49,13 @@ def log_api_call(
     service: Service,
     usage: Usage,
     estimated_cost_usd: float,
-) -> None:
-    db.execute(
+    *,
+    reservation: str | None = None,
+) -> int:
+    row = db.execute(
         """INSERT INTO api_calls (source_id, stage, service, input_tokens, output_tokens,
-           seconds, estimated_cost_usd, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+           seconds, estimated_cost_usd, created_at, run_id, outcome)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
         (
             source_id,
             stage,
@@ -62,8 +65,11 @@ def log_api_call(
             usage.seconds,
             estimated_cost_usd,
             utc_now().isoformat(),
+            reservation,
+            "reserved" if reservation is not None else "success",
         ),
-    )
+    ).fetchone()
+    return int(row[0])
 
 
 @dataclass(slots=True)

@@ -9,7 +9,7 @@ from typing import Any
 
 from montaj.models import Account, Campaign, Clip, Earning, Metric, Post, Record, Source
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -157,7 +157,13 @@ _COST_MIGRATION = (
     "CREATE INDEX api_calls_source_stage ON api_calls (source_id, stage)",
 )
 
-_MIGRATIONS = {1: _CLIP_MIGRATION, 2: _COST_MIGRATION}
+_BUDGET_MIGRATION = (
+    "ALTER TABLE api_calls ADD COLUMN run_id TEXT",
+    "ALTER TABLE api_calls ADD COLUMN outcome TEXT NOT NULL DEFAULT 'success'",
+    "CREATE INDEX api_calls_run ON api_calls (run_id)",
+)
+
+_MIGRATIONS = {1: _CLIP_MIGRATION, 2: _COST_MIGRATION, 3: _BUDGET_MIGRATION}
 
 
 class SchemaVersionError(ValueError):

@@ -37,6 +37,8 @@ class Settings(BaseModel):
     claude_model: str | None = None
     font_path: Path | None = None
     retry: RetrySettings = Field(default_factory=RetrySettings)
+    max_cost_per_run_usd: float = Field(default=0.5, ge=0, allow_inf_nan=False)
+    max_cost_per_source_usd: float = Field(default=2.0, ge=0, allow_inf_nan=False)
 
     @property
     def db_path(self) -> Path:
@@ -58,4 +60,11 @@ class Settings(BaseModel):
             claude_model=getenv("MONTAJ_CLAUDE_MODEL") or None,
             font_path=Path(font_path) if font_path else None,
             retry=RetrySettings.from_env(),
+            max_cost_per_run_usd=float(
+                getenv("MONTAJ_MAX_COST_PER_RUN_USD") or defaults.max_cost_per_run_usd
+            ),
+            max_cost_per_source_usd=float(
+                getenv("MONTAJ_MAX_COST_PER_SOURCE_USD")
+                or defaults.max_cost_per_source_usd
+            ),
         )
