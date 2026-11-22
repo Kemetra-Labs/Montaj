@@ -161,13 +161,22 @@ uv run montaj export --account 1
 
 A clip is copied only when it is approved, its check is a current pass or a confirmed warning, and its source is allowed with a permission basis recorded. Anything else is left in place and the reason is printed. The folder is `data/exports/<UTC date>/<account id>-<handle>/`. Each clip is an `mp4` plus a text file with the chosen hook, caption, and hashtags. `manifest.csv` lists the clip id, file name, platform, campaign, and the time the package was written. Run it again and clips already exported stay as they are. New clips are added to the same day's manifest.
 
-## Still planned
+## Post log
 
-This command is not in this build yet:
+`post-log` records a post you published by hand. It does not upload or approve anything.
 
-- `montaj post-log` records a post that was published by hand.
+```bash
+uv run montaj post-log 1 --account 1 --url https://www.youtube.com/shorts/example
+```
 
-Until that command exists, upload an exported clip yourself. Do not post a clip whose check failed.
+The clip must already be exported, and the account must exist. The clip is then `posted`. Logging that clip to the same account again is refused. A second account is also refused, because the clip is no longer exported. `--at` sets the time as `YYYY-MM-DD` or an ISO timestamp. Without it, the time is now.
+
+```bash
+uv run montaj post-log list
+uv run montaj post-log list --account 1 --today
+```
+
+The list shows each post and how many that account logged on each day. The compliance check reads those same rows for the daily cap and the rule against posting one clip twice.
 
 ## Where files go
 
