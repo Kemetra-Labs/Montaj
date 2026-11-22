@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from montaj.budget import Budget
@@ -142,6 +143,5 @@ def test_read_only_commands_do_not_lock(db_path: Path) -> None:
     ):
         runner.invoke(app, args)
     assert list(db_path.parent.rglob(".lock")) == []
-    help_text = runner.invoke(app, ["transcribe", "--help"])
-    assert help_text.exit_code == 0
-    assert "--wait" in help_text.output
+    transcribe = typer.main.get_command(app).commands["transcribe"]
+    assert any("--wait" in option.opts for option in transcribe.params)
