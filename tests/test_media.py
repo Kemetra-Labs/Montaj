@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from montaj.config import Settings
+
 ARABIC_SUBTITLE = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 320
@@ -23,7 +25,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,مرحبا بالعالم
 def test_ffmpeg_draws_arabic_subtitles(ffmpeg: str, tmp_path: Path) -> None:
     font_dir = tmp_path / "fonts"
     font_dir.mkdir()
-    font = Path(__file__).parents[1] / "assets/fonts/NotoSansArabic-Regular.ttf"
+    font = Settings().resolved_font_path
     shutil.copyfile(font, font_dir / font.name)
     (tmp_path / "fixture.ass").write_text(ARABIC_SUBTITLE, encoding="utf-8")
 

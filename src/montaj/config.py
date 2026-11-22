@@ -44,6 +44,14 @@ class Settings(BaseModel):
     def db_path(self) -> Path:
         return self.data_dir / "montaj.db"
 
+    @property
+    def resolved_font_path(self) -> Path:
+        if self.font_path is not None:
+            return self.font_path
+        return (
+            Path(__file__).with_name("assets") / "fonts" / "NotoSansArabic-Regular.ttf"
+        )
+
     @classmethod
     def from_env(cls) -> "Settings":
         """Load exported environment variables, treating blanks as unset."""
