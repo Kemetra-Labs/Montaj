@@ -46,6 +46,7 @@ class CampaignRules(BaseModel):
     banned_topics: list[RuleText] = Field(default_factory=list)
     banned_words: list[RuleText] = Field(default_factory=list)
     required_hashtags: list[RuleText] = Field(default_factory=list)
+    allowed_sources: list[RuleText] = Field(default_factory=list)
     required_disclosure: str | None = None
     max_posts_per_day: int | None = Field(default=None, ge=1)
     flag_medical_claims: bool = False
@@ -98,6 +99,8 @@ class Source(Record):
     requested_language: str | None = None
     speech_status: str | None = None
     failure_note: str | None = None
+    allowed_basis: str | None = None
+    allowed_at: datetime | None = None
 
 
 class ClipStatus(StrEnum):

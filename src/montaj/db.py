@@ -9,7 +9,7 @@ from typing import Any
 
 from montaj.models import Account, Campaign, Clip, Earning, Metric, Post, Record, Source
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 _SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -100,10 +100,10 @@ _QUERIES: dict[type[Record], tuple[str, str]] = {
     ),
     Source: (
         """INSERT INTO sources (id, url, path, title, niche, campaign_id, source_allowed,
-           added_at, input_key, requested_language, speech_status, failure_note)
-           VALUES (:id, :url, :path, :title, :niche, :campaign_id,
+           added_at, input_key, requested_language, speech_status, failure_note,
+           allowed_basis, allowed_at) VALUES (:id, :url, :path, :title, :niche, :campaign_id,
            :source_allowed, :added_at, :input_key, :requested_language, :speech_status,
-           :failure_note) RETURNING *""",
+           :failure_note, :allowed_basis, :allowed_at) RETURNING *""",
         "SELECT * FROM sources WHERE id = ?",
     ),
     Clip: (
@@ -192,6 +192,10 @@ _MIGRATIONS = {
            CHECK (speech_status IN ('ok', 'language_mismatch', 'no_usable_speech', 'failed'))""",
         "ALTER TABLE sources ADD COLUMN failure_note TEXT",
     ),
+    9: (
+        "ALTER TABLE sources ADD COLUMN allowed_basis TEXT",
+        "ALTER TABLE sources ADD COLUMN allowed_at TEXT",
+    ),
 }
 
 
@@ -261,12 +265,13 @@ def fetch[T: Record](
 
 
 def save_source(db: sqlite3.Connection, source: Source) -> None:
-    """Persist source language and failure fields together."""
+    """Persist source permission, language, and failure fields together."""
     updated = db.execute(
         """UPDATE sources SET url = :url, path = :path, title = :title, niche = :niche,
            campaign_id = :campaign_id, source_allowed = :source_allowed, added_at = :added_at,
            input_key = :input_key, requested_language = :requested_language,
-           speech_status = :speech_status, failure_note = :failure_note
+           speech_status = :speech_status, failure_note = :failure_note,
+           allowed_basis = :allowed_basis, allowed_at = :allowed_at
            WHERE id = :id""",
         _record_values(source),
     )

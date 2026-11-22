@@ -32,7 +32,12 @@ def test_import_artifacts_and_reuse_url(
     downloader = FakeDownloader(media_fixture_dir / "sample.mp4")
     url = "https://example.test/media"
     source_id, reused = ingest_video(
-        settings, url, Niche.GAMES, allowed=True, downloader=downloader
+        settings,
+        url,
+        Niche.GAMES,
+        allowed=True,
+        basis="campaign allowed-source list",
+        downloader=downloader,
     )
     assert not reused
     source, metadata, path = load_source(settings, source_id)
@@ -43,14 +48,26 @@ def test_import_artifacts_and_reuse_url(
     with wave.open(str(path / "audio.wav"), "rb") as audio:
         assert (audio.getframerate(), audio.getnchannels()) == (16_000, 1)
     assert ingest_video(
-        settings, url, Niche.GAMES, allowed=True, downloader=downloader
+        settings,
+        url,
+        Niche.GAMES,
+        allowed=True,
+        basis="campaign allowed-source list",
+        downloader=downloader,
     ) == (source_id, True)
     assert downloader.urls == [url]
 
     with connect(db_path) as db:
         db.execute("UPDATE sources SET source_allowed = 0 WHERE id = ?", (source_id,))
     with pytest.raises(SourceError, match="lacks permission"):
-        ingest_video(settings, url, Niche.GAMES, allowed=True, downloader=downloader)
+        ingest_video(
+            settings,
+            url,
+            Niche.GAMES,
+            allowed=True,
+            basis="campaign allowed-source list",
+            downloader=downloader,
+        )
 
 
 @pytest.mark.media
@@ -64,10 +81,20 @@ def test_identical_local_files_share_source_id(
     shutil.copyfile(original, alias)
     settings = Settings(data_dir=db_path.parent)
     initial_id, reused = ingest_video(
-        settings, str(original), Niche.GAMES, allowed=True
+        settings,
+        str(original),
+        Niche.GAMES,
+        allowed=True,
+        basis="creator written permission",
     )
     assert not reused
-    assert ingest_video(settings, str(alias), Niche.GAMES, allowed=True) == (
+    assert ingest_video(
+        settings,
+        str(alias),
+        Niche.GAMES,
+        allowed=True,
+        basis="creator written permission",
+    ) == (
         initial_id,
         True,
     )
