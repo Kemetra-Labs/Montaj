@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 from montaj.config import Settings
 from montaj.db import connect, fetch, insert, save_source
 from montaj.media import MediaError, file_hash, run_tool
-from montaj.models import Campaign, Niche, Source
+from montaj.models import Campaign, CampaignRules, Niche, Source, utc_now
 
 
 class SourceError(ValueError):
@@ -270,6 +270,28 @@ def _extract_audio(video: Path, audio: Path) -> None:
     )
 
 
+def _permission(basis: str | None) -> str:
+    text = (basis or "").strip()
+    if not text:
+        raise SourceError("Record why this source may be used with --basis.", code=2)
+    if len(text) > 200:
+        raise SourceError(
+            "Keep --basis to a short description under 200 characters.", code=2
+        )
+    return text
+
+
+def _matches_allowed_list(location: str, rules: CampaignRules) -> None:
+    if not rules.allowed_sources:
+        return
+    folded = location.casefold()
+    if any(item.casefold() in folded for item in rules.allowed_sources):
+        return
+    raise SourceError(
+        "This source is not on the campaign's allowed-source list.", code=2
+    )
+
+
 def _mark_failed(settings: Settings, source_id: int, message: str) -> None:
     with connect(settings.db_path) as db:
         current = fetch(db, Source, source_id)
@@ -286,6 +308,7 @@ def ingest_video(
     niche: Niche,
     *,
     allowed: bool,
+    basis: str | None = None,
     campaign_id: int | None = None,
     downloader: Downloader | None = None,
 ) -> tuple[int, bool]:
@@ -293,6 +316,7 @@ def ingest_video(
         raise SourceError(
             "Only permitted sources can be processed. Confirm permission with --allowed."
         )
+    permission = _permission(basis)
     if not settings.db_path.is_file():
         raise SourceError("Database is missing. Run montaj db init first.")
     key, url, path = _identity(location)
@@ -301,6 +325,8 @@ def ingest_video(
         campaign = fetch(db, Campaign, campaign_id) if campaign_id is not None else None
         if campaign_id is not None and campaign is None:
             raise SourceError(f"Campaign {campaign_id} does not exist.")
+        if campaign is not None:
+            _matches_allowed_list(location, campaign.rules)
         row = db.execute("SELECT * FROM sources WHERE input_key = ?", (key,)).fetchone()
         if row is None:
             source = insert(
@@ -313,6 +339,8 @@ def ingest_video(
                     campaign_id=campaign_id,
                     source_allowed=True,
                     input_key=key,
+                    allowed_basis=permission,
+                    allowed_at=utc_now(),
                 ),
             )
         else:
@@ -325,12 +353,18 @@ def ingest_video(
         current = fetch(db, Source, source.id)
         if current is None or not current.source_allowed:
             raise SourceError(f"Source {source.id} lacks permission.")
+        if current.allowed_basis not in {None, permission}:
+            raise SourceError(
+                f"Source {source.id} already records a different permission basis."
+            )
         if current.niche != niche or (
             campaign_id is not None and current.campaign_id != campaign_id
         ):
             raise SourceError(
                 f"Source {source.id} is already registered with different source settings."
             )
+        current.allowed_basis = permission
+        current.allowed_at = current.allowed_at or utc_now()
         if _ready(directory) is not None:
             if current.speech_status == "failed":
                 current.speech_status = None
@@ -365,6 +399,10 @@ def ingest(
         bool,
         typer.Option("--allowed", help="Confirm permission to process the source."),
     ] = False,
+    basis: Annotated[
+        str | None,
+        typer.Option(help="Short reason this source may be used."),
+    ] = None,
 ) -> None:
     """Import a local video or a permitted video URL."""
     try:
@@ -373,6 +411,7 @@ def ingest(
             location,
             niche,
             allowed=allowed,
+            basis=basis,
             campaign_id=campaign,
         )
     except SourceError as exc:
