@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 from montaj.cli import app
 from montaj.config import Settings
 from montaj.db import connect, insert
-from montaj.doctor import YT_DLP_PIN, checks
+from montaj.doctor import YT_DLP_EJS_PIN, YT_DLP_PIN, checks
 from montaj.housekeeping import (
     HousekeepingError,
     backup_database,
@@ -307,5 +307,6 @@ def test_runbook_pins_the_yt_dlp_release() -> None:
     runbook = Path("docs/server.md").read_text(encoding="utf-8")
     assert YT_DLP_PIN in readme
     assert YT_DLP_PIN in runbook
-    assert "yt-dlp -U" in runbook
+    assert f"yt-dlp=={YT_DLP_PIN}" in runbook
+    assert f"yt-dlp-ejs=={YT_DLP_EJS_PIN}" in runbook
     assert "8765" in runbook

@@ -1,8 +1,10 @@
 """Import a permitted video, extract audio, and register reusable artifacts."""
 
 import json
+import math
 import shutil
 import sqlite3
+import wave
 from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -57,45 +59,158 @@ def enforce_limits(
         )
 
 
-def download_failure(detail: str) -> SourceError:
-    """Turn a yt-dlp failure into one plain message. No cookies or logins are added."""
+def _download_message(detail: str) -> str:
+    """Classify yt-dlp errors using fixed messages and discard the raw output."""
     folded = detail.casefold()
-    if "private" in folded:
-        reason = "The video is private."
-    elif "age" in folded:
-        reason = "The video is age-restricted."
-    elif "geo" in folded or "not available in your country" in folded:
-        reason = "The video is blocked in this region."
-    elif any(word in folded for word in ("network", "timed out", "temporary failure")):
-        reason = "The download failed because the network was unavailable."
-    elif any(word in folded for word in ("removed", "not found", "404", "unavailable")):
-        reason = "The video was removed or is unavailable."
-    else:
-        reason = "The download failed."
-    return SourceError(reason, code=4)
+    categories = (
+        (
+            ("private video", "video is private"),
+            "The video is private. Request a permitted copy.",
+        ),
+        (
+            ("age-restricted", "confirm your age", "age restriction"),
+            "The video is age-restricted. Request a permitted copy.",
+        ),
+        (
+            (
+                "not available in your country",
+                "not available from your location",
+                "geo restricted",
+            ),
+            "The video is blocked in this region. Request a permitted copy.",
+        ),
+        (
+            (
+                "sign in",
+                "login required",
+                "http error 401",
+                "http error 403",
+                "drm protected",
+                "drm-protected",
+            ),
+            "The source is restricted or access was denied. Check access to the permitted source.",
+        ),
+        (
+            ("no supported javascript runtime",),
+            "YouTube requires a supported JavaScript runtime. Install Deno or rebuild the Montaj image, then run montaj doctor.",
+        ),
+        (
+            ("challenge solver script", "yt-dlp-ejs"),
+            "The YouTube EJS solver could not be loaded. Install the matching yt-dlp-ejs package or rebuild the Montaj image, then run montaj doctor.",
+        ),
+        (
+            (
+                "requested format is not available",
+                "no video formats found",
+                "no formats found",
+            ),
+            "No usable video and audio format was available. Check the source format list or obtain a permitted media file with both streams.",
+        ),
+        (
+            (
+                "fragment",
+                "contenttooshort",
+                "did not get any data blocks",
+                "downloaded file is empty",
+                "incomplete read",
+            ),
+            "The download was incomplete. Retry the same permitted source.",
+        ),
+        (
+            (
+                "network",
+                "timed out",
+                "temporary failure",
+                "connection reset",
+                "connection refused",
+                "getaddrinfo",
+                "name resolution",
+                "unable to resolve",
+                "http error 429",
+                "http error 5",
+            ),
+            "The download failed because of a network or server error. Check connectivity and retry.",
+        ),
+        (
+            (
+                "video unavailable",
+                "video is unavailable",
+                "has been removed",
+                "http error 404",
+            ),
+            "The video was removed or is unavailable. Verify that the original link still works.",
+        ),
+        (
+            (
+                "ffmpeg not found",
+                "ffmpeg is not installed",
+                "install yt-dlp",
+                "could not start yt-dlp",
+            ),
+            "Check that yt-dlp and FFmpeg are installed and runnable with montaj doctor.",
+        ),
+        (
+            ("unsupported codec", "unsupported streams", "error merging formats"),
+            "The downloaded streams could not be merged. Obtain a permitted file with supported video and audio streams.",
+        ),
+    )
+    for phrases, message in categories:
+        if any(phrase in folded for phrase in phrases):
+            return message
+    return "The download failed. Run montaj doctor and check the source's availability."
+
+
+def download_failure(detail: str) -> SourceError:
+    return SourceError(_download_message(detail), code=4)
 
 
 class YtDlpDownloader:
     def download(self, url: str, destination: Path) -> None:
+        target = destination.resolve()
         try:
-            run_tool(
+            output = run_tool(
                 "yt-dlp",
                 [
                     "--ignore-config",
+                    "--no-plugin-dirs",
+                    "--no-remote-components",
+                    "--xff",
+                    "never",
                     "--no-playlist",
                     "--socket-timeout",
                     "20",
-                    "--no-part",
+                    "--abort-on-unavailable-fragments",
                     "--format",
-                    "best[ext=mp4]/best",
+                    "bv*+ba/b",
+                    "--encoding",
+                    "utf-8",
+                    "--no-simulate",
+                    "--print",
+                    "after_move:filepath",
                     "--output",
-                    str(destination),
+                    f"{str(target).replace('%', '%%')}.%(ext)s",
                     "--",
                     url,
                 ],
+                error_message=_download_message,
             )
         except MediaError as exc:
-            raise download_failure(str(exc)) from exc
+            raise SourceError(str(exc), code=4) from exc
+        paths = output.splitlines()
+        if len(paths) == 1:
+            downloaded = Path(paths[0])
+            if (
+                downloaded.parent == target.parent
+                and downloaded.stem == target.name
+                and not downloaded.is_symlink()
+                and downloaded.is_file()
+                and downloaded.stat().st_size > 0
+            ):
+                downloaded.replace(target)
+                return
+        raise SourceError(
+            "The download was incomplete. Retry the same permitted source.", code=4
+        )
 
 
 def source_dir(settings: Settings, source_id: int) -> Path:
@@ -160,20 +275,105 @@ def _prepare_video(local_path: Path, video: Path) -> None:
         "-nostdin",
         "-v",
         "error",
+        "-xerror",
         "-y",
         "-protocol_whitelist",
         "file,pipe",
         "-i",
         str(local_path),
         "-map",
-        "0:v:0",
+        "0:V:0",
         "-map",
         "0:a:0",
     ]
     try:
-        run_tool("ffmpeg", [*args, "-c", "copy", "-movflags", "+faststart", str(video)])
+        run_tool(
+            "ffmpeg",
+            [*args, "-c", "copy", "-movflags", "+faststart", str(video)],
+            error_message=_media_message,
+        )
     except MediaError:
-        run_tool("ffmpeg", [*args, "-c:v", "libx264", "-c:a", "aac", str(video)])
+        run_tool(
+            "ffmpeg",
+            [
+                *args,
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+                "-movflags",
+                "+faststart",
+                str(video),
+            ],
+            error_message=_media_message,
+        )
+
+
+_UNREADABLE_MEDIA = "The media could not be read as a video. It may be corrupt or incomplete. Retry the source or obtain a complete permitted copy."
+
+
+def _media_message(detail: str) -> str:
+    folded = detail.casefold()
+    if "timed out" in folded:
+        return "Media validation or normalization timed out. Retry with a complete permitted copy."
+    if any(
+        phrase in folded
+        for phrase in (
+            "unsupported codec",
+            "decoder not found",
+            "no decoder",
+            "not currently supported",
+        )
+    ) or ("decoder" in folded and "not found" in folded):
+        return "The media uses unsupported streams. Obtain a permitted copy with supported video and audio codecs."
+    return _UNREADABLE_MEDIA
+
+
+def _probe_input(path: Path) -> tuple[float, str | None]:
+    if not path.is_file() or path.stat().st_size == 0:
+        raise SourceError(_UNREADABLE_MEDIA, code=5)
+    result = run_tool(
+        "ffprobe",
+        [
+            "-v",
+            "error",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-show_entries",
+            "stream=codec_type:stream_disposition=attached_pic:format=duration:format_tags=title",
+            "-of",
+            "json",
+            str(path),
+        ],
+        error_message=_media_message,
+    )
+    try:
+        probe = json.loads(result)
+        streams = {
+            stream.get("codec_type")
+            for stream in probe.get("streams", [])
+            if not stream.get("disposition", {}).get("attached_pic")
+        }
+        video_format = probe.get("format", {})
+        title = video_format.get("tags", {}).get("title")
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise SourceError(_UNREADABLE_MEDIA, code=5) from exc
+    if "video" not in streams:
+        raise SourceError(
+            "The media has no usable video stream. Obtain a permitted video file.",
+            code=5,
+        )
+    if "audio" not in streams:
+        raise SourceError(
+            "The media has no audio stream. Obtain a permitted copy with audio.", code=5
+        )
+    try:
+        duration = float(video_format.get("duration"))
+    except (TypeError, ValueError) as exc:
+        raise SourceError(_UNREADABLE_MEDIA, code=5) from exc
+    if duration <= 0 or not math.isfinite(duration):
+        raise SourceError(_UNREADABLE_MEDIA, code=5)
+    return duration, title if isinstance(title, str) else None
 
 
 def _artifacts(
@@ -196,49 +396,24 @@ def _artifacts(
         video = root / "video.mp4"
         audio = root / "audio.wav"
         try:
+            duration, title = _probe_input(path)
+            name = path.name if url is None else "Downloaded media"
+            enforce_limits(name, duration, path.stat().st_size, settings)
             _prepare_video(path, video)
             _extract_audio(video, audio)
-            probe = json.loads(
-                run_tool(
-                    "ffprobe",
-                    [
-                        "-v",
-                        "error",
-                        "-protocol_whitelist",
-                        "file,pipe",
-                        "-show_entries",
-                        "stream=codec_type:format=duration:format_tags=title",
-                        "-of",
-                        "json",
-                        str(video),
-                    ],
-                )
-            )
         except MediaError as exc:
-            raise SourceError(
-                f"{path.name} could not be read as a video.", code=5
-            ) from exc
-        if not any(
-            stream.get("codec_type") == "video" for stream in probe.get("streams", [])
-        ):
-            raise SourceError(f"{path.name} could not be read as a video.", code=5)
-        video_format = probe.get("format", {})
-        title = video_format.get("tags", {}).get("title") or (
+            raise SourceError(str(exc), code=5) from exc
+        title = title or (
             path.stem if url is None else urlsplit(url).hostname or "Untitled video"
         )
-        try:
-            metadata = SourceMetadata(
-                title=title,
-                duration=video_format.get("duration"),
-                url=url,
-                video_hash=file_hash(video),
-                audio_hash=file_hash(audio),
-            )
-        except ValidationError as exc:
-            raise SourceError(
-                f"{path.name} could not be read as a video.", code=5
-            ) from exc
-        enforce_limits(path.name, metadata.duration, video.stat().st_size, settings)
+        enforce_limits(name, duration, video.stat().st_size, settings)
+        metadata = SourceMetadata(
+            title=title,
+            duration=duration,
+            url=url,
+            video_hash=file_hash(video),
+            audio_hash=file_hash(audio),
+        )
         meta = root / "meta.json"
         meta.write_text(metadata.model_dump_json(indent=2) + "\n", encoding="utf-8")
         for artifact in (video, audio, meta):
@@ -253,6 +428,7 @@ def _extract_audio(video: Path, audio: Path) -> None:
             "-nostdin",
             "-v",
             "error",
+            "-xerror",
             "-y",
             "-protocol_whitelist",
             "file,pipe",
@@ -269,7 +445,17 @@ def _extract_audio(video: Path, audio: Path) -> None:
             "pcm_s16le",
             str(audio),
         ],
+        error_message=_media_message,
     )
+    try:
+        with wave.open(str(audio), "rb") as output:
+            if not output.readframes(1):
+                raise SourceError(
+                    "The audio stream has no readable samples. Obtain a permitted copy with audio.",
+                    code=5,
+                )
+    except (EOFError, OSError, wave.Error) as exc:
+        raise SourceError(_UNREADABLE_MEDIA, code=5) from exc
 
 
 def _permission(basis: str | None) -> str:

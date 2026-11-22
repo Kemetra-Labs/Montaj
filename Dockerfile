@@ -1,4 +1,5 @@
 FROM ghcr.io/astral-sh/uv:0.13.3 AS uv
+FROM denoland/deno:bin-2.9.8@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 AS deno
 FROM python:3.12-slim-trixie
 
 ENV PATH="/app/.venv/bin:$PATH" \
@@ -14,6 +15,7 @@ RUN apt-get update \
     && install -d -o montaj -g montaj /app/data
 
 COPY --from=uv /uv /usr/local/bin/uv
+COPY --from=deno --chmod=0755 /deno /usr/local/bin/deno
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-build --no-install-project
@@ -21,7 +23,8 @@ RUN uv sync --locked --no-build --no-install-project
 COPY README.md LICENSE ./
 COPY src/ ./src/
 RUN uv build --wheel --no-sources --out-dir /tmp/montaj-dist \
-    && uv pip install --no-build --no-deps /tmp/montaj-dist/*.whl yt-dlp==2026.10.26 \
+    && uv pip install --no-build --no-deps /tmp/montaj-dist/*.whl \
+        yt-dlp==2026.10.26 yt-dlp-ejs==0.8.0 \
     && rm -rf /tmp/montaj-dist \
     && install -D -m 644 src/montaj/assets/fonts/NotoSansArabic-Regular.ttf \
         /usr/local/share/fonts/montaj/NotoSansArabic-Regular.ttf \
@@ -33,5 +36,7 @@ COPY docs/server.md ./docs/server.md
 COPY tests/ ./tests/
 
 USER montaj
+RUN deno eval 'if (1 + 1 !== 2) Deno.exit(1)' \
+    && python -c 'from yt_dlp_ejs.yt import solver; assert solver.core() and solver.lib()'
 ENTRYPOINT ["montaj"]
 CMD ["--help"]
