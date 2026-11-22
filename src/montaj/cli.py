@@ -18,6 +18,7 @@ from montaj.draft import draft
 from montaj.ingest import ingest
 from montaj.preview import preview_app
 from montaj.rank import rank
+from montaj.review import review
 from montaj.run import run
 from montaj.transcribe import transcribe
 
@@ -36,6 +37,7 @@ app.command("captions")(captions)
 app.command("draft")(draft)
 app.command("check")(check_clips)
 app.command("run")(run)
+app.command("review")(review)
 
 
 @app.callback()

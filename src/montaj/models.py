@@ -135,6 +135,7 @@ class ClipStage(StrEnum):
 
 class Clip(Record):
     source_id: int
+    account_id: int | None = None
     start_s: float = Field(ge=0)
     end_s: float = Field(gt=0)
     moment_type: str | None = None
