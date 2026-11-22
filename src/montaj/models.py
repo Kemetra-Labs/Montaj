@@ -1,9 +1,10 @@
 """Records stored by the Montaj SQLite database."""
 
+import json
 from datetime import UTC, date, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def utc_now() -> datetime:
@@ -52,6 +53,36 @@ class Source(Record):
     added_at: datetime = Field(default_factory=utc_now)
 
 
+class ClipStatus(StrEnum):
+    CANDIDATE = "candidate"
+    RANKED = "ranked"
+    REJECTED = "rejected"
+    RENDERED = "rendered"
+    CAPTIONED = "captioned"
+    DRAFTED = "drafted"
+    CHECKED = "checked"
+    NEEDS_FIX = "needs_fix"
+    APPROVED = "approved"
+    EXPORTED = "exported"
+    POSTED = "posted"
+
+
+class CheckResult(StrEnum):
+    PASS = "pass"
+    WARN = "warn"
+    FAIL = "fail"
+
+
+class ClipStage(StrEnum):
+    CUT = "cut"
+    CAPTIONS = "captions"
+    DRAFT = "draft"
+    CHECK = "check"
+    REVIEW = "review"
+    EXPORT = "export"
+    POST_LOG = "post-log"
+
+
 class Clip(Record):
     source_id: int
     start_s: float = Field(ge=0)
@@ -63,7 +94,19 @@ class Clip(Record):
     caption: str | None = None
     raw_path: str | None = None
     final_path: str | None = None
-    status: str = "candidate"
+    status: ClipStatus = ClipStatus.CANDIDATE
+    input_hashes: dict[ClipStage, str] = Field(default_factory=dict)
+    draft_quotes_clip: bool = True
+    check_result: CheckResult | None = None
+    check_input_hash: str | None = None
+    reviewed_at: datetime | None = None
+    reviewed_input_hash: str | None = None
+    changed_since_review: bool = False
+
+    @field_validator("input_hashes", mode="before")
+    @classmethod
+    def decode_input_hashes(cls, value: object) -> object:
+        return json.loads(value) if isinstance(value, str) else value
 
 
 class Post(Record):
