@@ -111,12 +111,35 @@ uv run montaj costs
 
 `costs` prints the estimated API spend by stage and source. `--source 1` limits the report.
 
+## Preview
+
+`preview` is read-only. It does not approve, export, or post.
+
+```bash
+uv run montaj preview serve
+```
+
+That listens on `http://127.0.0.1:8765/` and will not bind any other address. The page lists rendered clips that are not rejected or already posted, with the transcript, both hooks, the caption, the check result, the permission basis, and a video player. `--port` changes the port (default `8765`).
+
+From your own machine, tunnel to a server and open the same local address:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 user@server
+```
+
+To download the renders for one source, copy them into one folder with an index page:
+
+```bash
+uv run montaj preview export 1
+```
+
+The folder defaults to `data/preview/1/`. `--dest` picks another folder. Files outside the data directory are refused.
+
 ## Still planned
 
 These commands are not in this build yet:
 
 - `montaj run` walks transcribe through check for one source and stops at the first failure.
-- `montaj preview` serves a read-only local page for rendered clips. It does not approve.
 - `montaj review` shows the next clip in the terminal. A person approves or rejects. A failed check cannot be approved.
 - `montaj export` packages approved clips whose check is current and whose permission basis is recorded.
 - `montaj post-log` records a post that was published by hand.

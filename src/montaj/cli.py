@@ -16,6 +16,7 @@ from montaj.db import SchemaVersionError, connect, init_db
 from montaj.doctor import checks, online_checks
 from montaj.draft import draft
 from montaj.ingest import ingest
+from montaj.preview import preview_app
 from montaj.rank import rank
 from montaj.transcribe import transcribe
 
@@ -24,6 +25,7 @@ db_app = typer.Typer(no_args_is_help=True)
 app.add_typer(db_app, name="db", help="Manage the SQLite database.")
 app.add_typer(campaign_app, name="campaign", help="Manage campaigns and their rules.")
 app.add_typer(account_app, name="account", help="Manage posting accounts.")
+app.add_typer(preview_app, name="preview")
 app.command("ingest")(ingest)
 app.command("transcribe")(transcribe)
 app.command("candidates")(candidates)
