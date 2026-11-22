@@ -18,6 +18,10 @@ from montaj.config import RetrySettings, Settings
 from montaj.costs import Service, Usage, estimate_cost
 from montaj.db import SCHEMA_VERSION, connect
 from montaj.external import CallContext, CallResult, ExternalCallError, call_external
+from montaj.housekeeping import disk_free
+
+# Stable yt-dlp release. Nightly builds are not accepted as the pin.
+YT_DLP_PIN = "2026.10.26"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +29,7 @@ class Check:
     name: str
     ok: bool
     detail: str
+    warning: bool = False
 
 
 def _tool(name: str, version_arg: str) -> Check:
@@ -43,6 +48,36 @@ def _tool(name: str, version_arg: str) -> Check:
         return Check(name, False, f"Check that {name} runs and reports its version.")
     lines = result.stdout.splitlines()
     return Check(name, True, lines[0] if lines else "available")
+
+
+def _yt_dlp() -> Check:
+    check = _tool("yt-dlp", "--version")
+    if not check.ok or YT_DLP_PIN in check.detail.split():
+        return check
+    return Check(
+        check.name,
+        True,
+        f"{check.detail} (pinned {YT_DLP_PIN}; update with: yt-dlp -U)",
+        warning=True,
+    )
+
+
+def _disk(settings: Settings, measure: Callable[[Path], int]) -> Check:
+    try:
+        free = measure(settings.data_dir)
+    except OSError:
+        return Check(
+            "disk space", False, "Could not read free space on the data volume."
+        )
+    free_mb = free / (1024 * 1024)
+    if free_mb + 1e-8 < settings.min_free_mb:
+        return Check(
+            "disk space",
+            True,
+            f"{free_mb:.0f} MB free; warning threshold is {settings.min_free_mb:.0f} MB.",
+            warning=True,
+        )
+    return Check("disk space", True, f"{free_mb:.0f} MB free.")
 
 
 def _data_directory(path: Path) -> Check:
@@ -76,13 +111,15 @@ def _database(path: Path) -> Check:
     return Check("SQLite", True, f"schema version {SCHEMA_VERSION}")
 
 
-def checks(settings: Settings) -> list[Check]:
+def checks(
+    settings: Settings, *, free_bytes: Callable[[Path], int] | None = None
+) -> list[Check]:
     font = settings.resolved_font_path
     font_exists = font.is_file()
     results = [
         _tool("ffmpeg", "-version"),
         _tool("ffprobe", "-version"),
-        _tool("yt-dlp", "--version"),
+        _yt_dlp(),
     ]
     for name, secret in (
         ("DEEPGRAM_API_KEY", settings.deepgram_api_key),
@@ -109,6 +146,7 @@ def checks(settings: Settings) -> list[Check]:
             ),
         )
     )
+    results.append(_disk(settings, free_bytes or disk_free))
     return results
 
 

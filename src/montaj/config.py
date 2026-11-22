@@ -42,6 +42,9 @@ class Settings(BaseModel):
     max_cost_per_source_usd: float = Field(default=2.0, ge=0, allow_inf_nan=False)
     max_source_minutes: float = Field(default=120, gt=0, allow_inf_nan=False)
     max_source_mb: float = Field(default=1024, gt=0, allow_inf_nan=False)
+    backup_keep: int = Field(default=7, ge=1)
+    min_free_mb: float = Field(default=1024, ge=0, allow_inf_nan=False)
+    clean_older_than_days: int = Field(default=14, ge=0)
 
     @property
     def db_path(self) -> Path:
@@ -85,5 +88,10 @@ class Settings(BaseModel):
             ),
             max_source_mb=float(
                 getenv("MONTAJ_MAX_SOURCE_MB") or defaults.max_source_mb
+            ),
+            backup_keep=int(getenv("MONTAJ_BACKUP_KEEP") or defaults.backup_keep),
+            min_free_mb=float(getenv("MONTAJ_MIN_FREE_MB") or defaults.min_free_mb),
+            clean_older_than_days=int(
+                getenv("MONTAJ_CLEAN_OLDER_THAN_DAYS") or defaults.clean_older_than_days
             ),
         )

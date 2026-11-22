@@ -36,6 +36,8 @@ def test_doctor_reports_versions_and_redacts_secrets(
     assert result.exit_code == 0, result.output
     for name in ("ffmpeg", "ffprobe", "yt-dlp"):
         assert f"{name}: {name} 1.2.3" in result.output
+    assert "pinned 2026.10.26" in result.output
+    assert "yt-dlp -U" in result.output
     for name in ("DEEPGRAM_API_KEY", "ANTHROPIC_API_KEY"):
         assert f"{name}: set" in result.output
     assert "secret-value" not in result.output

@@ -3,6 +3,7 @@
 import json
 import shutil
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Annotated, Protocol
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from montaj.config import Settings
 from montaj.db import connect, fetch, insert, save_source
+from montaj.housekeeping import HousekeepingError, disk_free, require_space
 from montaj.media import MediaError, file_hash, run_tool
 from montaj.models import Campaign, CampaignRules, Niche, Source, utc_now
 
@@ -311,6 +313,7 @@ def ingest_video(
     basis: str | None = None,
     campaign_id: int | None = None,
     downloader: Downloader | None = None,
+    free_bytes: Callable[[Path], int] | None = None,
 ) -> tuple[int, bool]:
     if not allowed:
         raise SourceError(
@@ -374,6 +377,10 @@ def ingest_video(
         directory.mkdir(parents=True, exist_ok=True)
         save_source(db, current)
     try:
+        try:
+            require_space(settings, path, free_bytes or disk_free)
+        except HousekeepingError as exc:
+            raise SourceError(str(exc), code=3) from exc
         metadata = _artifacts(
             settings, directory, path, url, downloader or YtDlpDownloader()
         )
