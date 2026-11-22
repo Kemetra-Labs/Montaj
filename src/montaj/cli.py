@@ -13,7 +13,7 @@ from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.cut import cut
 from montaj.db import SchemaVersionError, connect, init_db
-from montaj.doctor import checks
+from montaj.doctor import checks, online_checks
 from montaj.draft import draft
 from montaj.ingest import ingest
 from montaj.rank import rank
@@ -40,8 +40,12 @@ def main() -> None:
 
 
 @app.command("doctor")
-def doctor() -> None:
-    """Check tools, credentials, and local assets without making network calls."""
+def doctor(
+    online: bool = typer.Option(
+        False, "--online", help="Send one tiny request to Deepgram and one to Claude."
+    ),
+) -> None:
+    """Check tools, credentials, and local assets. Add --online to probe the APIs."""
     try:
         settings = Settings.from_env()
     except ValueError as exc:
@@ -50,9 +54,14 @@ def doctor() -> None:
         )
         raise typer.Exit(1) from exc
     results = checks(settings)
+    if online:
+        probed, cost = online_checks(settings)
+        results.extend(probed)
     for check in results:
         status = "OK" if check.ok else "FAIL"
         typer.echo(f"{status:4}  {check.name}: {check.detail}")
+    if online:
+        typer.echo(f"Smoke test: ${cost:.6f}")
     if any(not check.ok for check in results):
         raise typer.Exit(1)
 

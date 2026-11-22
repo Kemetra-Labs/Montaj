@@ -1,14 +1,23 @@
-"""Offline checks for dependencies and local Montaj configuration."""
+"""Offline checks, plus an optional one-request probe of each paid API."""
 
+import json
 import shutil
 import sqlite3
 import subprocess
+import wave
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import TemporaryFile
+from tempfile import TemporaryDirectory, TemporaryFile
+from typing import Any
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
-from montaj.config import Settings
+from montaj.budget import Budget, BudgetExceeded
+from montaj.config import RetrySettings, Settings
+from montaj.costs import Service, Usage, estimate_cost
 from montaj.db import SCHEMA_VERSION, connect
+from montaj.external import CallContext, CallResult, ExternalCallError, call_external
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,3 +110,197 @@ def checks(settings: Settings) -> list[Check]:
         )
     )
     return results
+
+
+# One cent. The smoke test refuses to send a request priced at or above this.
+_CENT = 0.01
+_Opener = Callable[..., Any]
+
+
+def _redact(text: str, settings: Settings) -> str:
+    for secret in (settings.deepgram_api_key, settings.anthropic_api_key):
+        if secret is None:
+            continue
+        raw = secret.get_secret_value()
+        if raw:
+            text = text.replace(raw, "[redacted]")
+    return text
+
+
+def _service_reason(exc: Exception) -> str:
+    if isinstance(exc, BudgetExceeded):
+        return str(exc)
+    folded = str(exc).casefold()
+    if "unknown model" in folded:
+        return "unknown model name"
+    if any(phrase in folded for phrase in ("quota", "billing", "http 402", "http 429")):
+        return "no quota"
+    if any(phrase in folded for phrase in ("authentication", "http 401", "http 403")):
+        return "bad key"
+    return str(exc)
+
+
+def _silent_wav(path: Path) -> None:
+    """One second of silence, the smallest clip that still exercises listen."""
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(8000)
+        handle.writeframes(b"\x00\x00" * 8000)
+
+
+def _probe(
+    settings: Settings,
+    budget: Budget,
+    name: str,
+    service: Service,
+    model: str,
+    usage: Usage,
+    send: Callable[[], CallResult[None]],
+) -> Check:
+    try:
+        estimate = estimate_cost(service, model, usage)
+    except ValueError as exc:
+        return Check(name, False, _redact(str(exc), settings))
+    if estimate >= _CENT:
+        return Check(name, False, "smoke test would cost more than one cent")
+    context = CallContext(settings.db_path, None, "doctor", service, model, budget)
+    try:
+        call_external(context, usage, send, policy=RetrySettings(attempts=1))
+    except (ExternalCallError, BudgetExceeded, ValueError) as exc:
+        return Check(name, False, _redact(_service_reason(exc), settings))
+    return Check(name, True, model)
+
+
+def _deepgram_send(
+    path: Path, key: str, model: str, language: str, opener: _Opener
+) -> Callable[[], CallResult[None]]:
+    def send() -> CallResult[None]:
+        query = urlencode({"model": model, "language": language})
+        request = Request(
+            f"https://api.deepgram.com/v1/listen?{query}",
+            data=path.read_bytes(),
+            method="POST",
+            headers={"Content-Type": "audio/wav"},
+        )
+        request.add_unredirected_header("Authorization", f"Token {key}")
+        with opener(request, timeout=30) as response:
+            payload = json.load(response)
+        seconds = 1.0
+        if isinstance(payload, dict):
+            meta = payload.get("metadata")
+            if isinstance(meta, dict) and isinstance(meta.get("duration"), int | float):
+                seconds = float(meta["duration"])
+        return CallResult(None, Usage(seconds=seconds))
+
+    return send
+
+
+def _claude_send(
+    model: str, key: str, opener: _Opener
+) -> Callable[[], CallResult[None]]:
+    def send() -> CallResult[None]:
+        # between_tools skips up-front thinking so this stays a one-token reply.
+        # https://platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5
+        body = json.dumps(
+            {
+                "model": model,
+                "max_tokens": 1,
+                "thinking": {"type": "between_tools"},
+                "messages": [{"role": "user", "content": "Reply with ok."}],
+            }
+        ).encode()
+        request = Request(
+            "https://api.anthropic.com/v1/messages",
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        request.add_unredirected_header("X-Api-Key", key)
+        with opener(request, timeout=30) as response:
+            payload = json.load(response)
+        usage = payload.get("usage") if isinstance(payload, dict) else None
+        if not isinstance(usage, dict):
+            usage = {}
+        return CallResult(
+            None,
+            Usage(
+                input_tokens=int(usage.get("input_tokens") or 1),
+                output_tokens=int(usage.get("output_tokens") or 1),
+            ),
+        )
+
+    return send
+
+
+def _smoke_cost(settings: Settings, run_id: str) -> float:
+    with connect(settings.db_path) as db:
+        row = db.execute(
+            "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM api_calls WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    return float(row[0])
+
+
+def online_checks(
+    settings: Settings, opener: _Opener | None = None
+) -> tuple[list[Check], float]:
+    """Probe Deepgram and Claude once each. Return checks and the logged cost."""
+    transport = urlopen if opener is None else opener
+    ready = _database(settings.db_path)
+    if not ready.ok:
+        blocked = Check("deepgram", False, ready.detail)
+        return [blocked, Check("claude", False, ready.detail)], 0.0
+    budget = Budget.from_settings(settings)
+    results: list[Check] = []
+    deepgram_key = settings.deepgram_api_key
+    if deepgram_key is None or not deepgram_key.get_secret_value().strip():
+        results.append(Check("deepgram", False, "bad key"))
+    else:
+        billing = settings.deepgram_model
+        if settings.deepgram_language == "multi":
+            billing = f"{billing}-multilingual"
+        with TemporaryDirectory() as directory:
+            audio = Path(directory) / "silence.wav"
+            _silent_wav(audio)
+            results.append(
+                _probe(
+                    settings,
+                    budget,
+                    "deepgram",
+                    Service.DEEPGRAM,
+                    billing,
+                    Usage(seconds=1),
+                    _deepgram_send(
+                        audio,
+                        deepgram_key.get_secret_value(),
+                        settings.deepgram_model,
+                        settings.deepgram_language,
+                        transport,
+                    ),
+                )
+            )
+    claude_key = settings.anthropic_api_key
+    if claude_key is None or not claude_key.get_secret_value().strip():
+        results.append(Check("claude", False, "bad key"))
+    else:
+        results.append(
+            _probe(
+                settings,
+                budget,
+                "claude",
+                Service.CLAUDE,
+                settings.claude_model,
+                Usage(input_tokens=16, output_tokens=1),
+                _claude_send(
+                    settings.claude_model, claude_key.get_secret_value(), transport
+                ),
+            )
+        )
+    cost = _smoke_cost(settings, budget.run_id)
+    if cost >= _CENT:
+        results.append(Check("smoke test", False, f"${cost:.6f} is more than one cent"))
+    return results, cost

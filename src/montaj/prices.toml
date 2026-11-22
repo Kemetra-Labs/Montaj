@@ -7,7 +7,8 @@ usd_per_minute = 0.0077
 [deepgram.nova-3-multilingual]
 usd_per_minute = 0.0092
 
-# https://platform.claude.com/docs/en/models/overview
+# Claude Sonnet 5.5, model id claude-sonnet-5-5. Confirmed 2026-11-22.
+# https://platform.claude.com/docs/en/models/sonnet-5-5/overview
 [claude.claude-sonnet-5-5]
 usd_per_million_input_tokens = 2.0
 usd_per_million_output_tokens = 10.0

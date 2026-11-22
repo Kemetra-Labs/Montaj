@@ -44,7 +44,7 @@ def estimate_cost(
 
 def log_api_call(
     db: sqlite3.Connection,
-    source_id: int,
+    source_id: int | None,
     stage: str,
     service: Service,
     usage: Usage,
@@ -93,7 +93,8 @@ def cost_totals(db: sqlite3.Connection, source_id: int | None = None) -> CostTot
     )
     for row in rows:
         source, stage, total = row
-        summary.by_source[source] = summary.by_source.get(source, 0) + total
+        if source is not None:
+            summary.by_source[source] = summary.by_source.get(source, 0) + total
         summary.by_stage[stage] = summary.by_stage.get(stage, 0) + total
     approved = db.execute(
         """SELECT COUNT(*) FROM clips WHERE (? IS NULL OR source_id = ?)
