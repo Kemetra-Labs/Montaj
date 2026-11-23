@@ -13,11 +13,19 @@ import typer
 from pydantic import ValidationError
 
 from montaj.config import Settings
-from montaj.dashboard import BASE_PATH, dashboard_response, parse_source_id
+from montaj.dashboard import (
+    BASE_PATH,
+    STAGE_PATH,
+    confirm_source_id,
+    dashboard_response,
+    not_found_response,
+    parse_source_id,
+    render_confirm,
+    render_confirm_unavailable,
+)
 from montaj.dashboard_jobs import (
     FORM_TYPE,
     JOBS_PATH,
-    STAGE_PATH,
     JobQueue,
     StageSubmission,
     Submission,
@@ -28,7 +36,7 @@ from montaj.media import MediaError, source_lock
 from montaj.models import CheckResult, Clip, ClipStatus, Source
 from montaj.rank import clip_words
 from montaj.review import review_decision
-from montaj.stage_jobs import BoardStage
+from montaj.stage_jobs import PAID_STAGES, BoardStage
 from montaj.transcribe import Transcript
 
 preview_app = typer.Typer(
@@ -264,6 +272,36 @@ def _export_form(settings: Settings, source_id: int, token: str) -> str:
     )
 
 
+def _confirm_response(
+    settings: Settings,
+    jobs: JobQueue | None,
+    source_id: int,
+    query: dict[str, list[str]],
+) -> tuple[int, str, bytes]:
+    """The cost confirmation for one paid stage. Free stages and read-only servers get 404."""
+    try:
+        stage = BoardStage(query.get("stage", [""])[0])
+    except ValueError:
+        return not_found_response()
+    if jobs is None or stage not in PAID_STAGES:
+        return not_found_response()
+    with connect(settings.db_path, read_only=True) as db:
+        source = fetch(db, Source, source_id)
+    if source is None:
+        return not_found_response()
+    html_type = "text/html; charset=utf-8"
+    permitted = source.source_allowed and (source.allowed_basis or "").strip()
+    try:
+        lines = jobs.estimate(source_id, stage, None) if permitted else []
+    except (ValueError, MediaError, OSError, sqlite3.Error):
+        lines = []
+    if not lines:
+        return 200, html_type, render_confirm_unavailable(source_id)
+    retry = query.get("retry") == ["yes"]
+    page = render_confirm(source_id, stage, lines, jobs.token, retry=retry)
+    return 200, html_type, page
+
+
 def handle_preview(
     settings: Settings, target: str, jobs: JobQueue | None = None
 ) -> tuple[int, str, bytes]:
@@ -274,6 +312,9 @@ def handle_preview(
     content_type = "text/html; charset=utf-8"
     if jobs is not None and path == JOBS_PATH:
         return 200, content_type, jobs.page(query.get("notice", [""])[0])
+    confirm_id = confirm_source_id(path)
+    if confirm_id is not None:
+        return _confirm_response(settings, jobs, confirm_id, query)
     if path == BASE_PATH or path.startswith(f"{BASE_PATH}/"):
         view = query.get("view", [""])[0]
         if jobs is None:
@@ -287,6 +328,7 @@ def handle_preview(
             token=jobs.token,
             notice=query.get("notice", [""])[0],
             run_spend=jobs.run_spend(),
+            live=jobs.live_job(),
         )
     if path in {"", "/"}:
         source_id = parse_source_id(query["source"][0]) if "source" in query else None

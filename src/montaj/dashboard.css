@@ -130,6 +130,18 @@ tbody th .badge { margin-top: .4rem; }
 .steps { margin: 0; padding: 0; list-style: none; }
 .steps li { display: flex; align-items: center; justify-content: space-between; gap: .65rem; min-height: 3rem; padding: .6rem 1.05rem; border-top: 1px solid var(--stroke); font-size: .88rem; }
 .timeline li { min-height: 3.75rem; }
+.stage-lines li { flex-wrap: wrap; align-items: flex-start; }
+.stage-info { display: grid; gap: .1rem; min-width: 0; }
+.stage-info .cell-state { color: var(--muted); font-size: .76rem; }
+.stage-line.done .cell-state { color: var(--success); }
+.stage-line.running .cell-state { color: var(--review); }
+.stage-line.failed .cell-state { color: var(--warning); }
+.stage-info .secondary { margin-top: 0; max-width: 34rem; }
+.stage-action { display: grid; gap: .2rem; justify-items: end; text-align: right; }
+.stage-action .row-action { margin: 0; }
+.stage-action button:not(:disabled) { cursor: pointer; }
+.stage-action button:disabled { cursor: not-allowed; opacity: .6; }
+.estimate { margin: 0; padding-left: 1.2rem; font-size: .88rem; }
 .empty-copy { border-top: 1px solid var(--stroke); padding: .9rem 1.05rem; color: var(--muted); font-size: .85rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 

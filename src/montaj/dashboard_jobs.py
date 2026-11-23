@@ -2,6 +2,7 @@
 
 import logging
 import re
+import sqlite3
 from dataclasses import dataclass, field, replace
 from html import escape
 from pathlib import Path, PureWindowsPath
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field
 from montaj.budget import Budget
 from montaj.candidates import CANDIDATE_LIMIT
 from montaj.config import Settings
-from montaj.dashboard import render_dashboard_page
+from montaj.dashboard import LiveJob, render_dashboard_page
 from montaj.db import connect, fetch
 from montaj.job import _JOB_ERRORS, DEFAULT_TARGET, produce_batch, start_job
 from montaj.models import Niche, Source
@@ -25,7 +26,6 @@ from montaj.stage_jobs import PAID_STAGES, BoardStage, run_board_stage
 
 _LOG = logging.getLogger(__name__)
 JOBS_PATH = "/dashboard/jobs"
-STAGE_PATH = "/dashboard/stage"
 FORM_TYPE = "application/x-www-form-urlencoded"
 _YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
 _VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
@@ -225,11 +225,25 @@ class JobQueue:
         if activity is None or not activity.running:
             return None
         with connect(self.settings.db_path, read_only=True) as db:
-            spent = db.execute(
-                "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM api_calls WHERE run_id = ?",
-                (activity.run_id,),
-            ).fetchone()[0]
-        return float(spent), Budget.from_settings(self.settings, None).per_run
+            spent = _run_spend(db, activity.run_id)
+        return spent, Budget.from_settings(self.settings, None).per_run
+
+    def live_job(self) -> LiveJob | None:
+        """The current or latest job and its run spend. None before any job."""
+        activity = self.snapshot()
+        if activity is None:
+            return None
+        with connect(self.settings.db_path, read_only=True) as db:
+            spent = _run_spend(db, activity.run_id)
+        return LiveJob(
+            activity.source_id,
+            activity.stage,
+            activity.running,
+            (activity.finished or perf_counter()) - activity.started,
+            spent,
+            activity.summary,
+            activity.problem,
+        )
 
     def submit_stage(self, submission: StageSubmission) -> None:
         self._require_permitted(submission.source)
@@ -304,14 +318,7 @@ class JobQueue:
                 "SELECT id, name FROM campaigns ORDER BY name"
             ).fetchall()
             activity = self.snapshot()
-            spend = (
-                0.0
-                if activity is None
-                else db.execute(
-                    "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM api_calls WHERE run_id = ?",
-                    (activity.run_id,),
-                ).fetchone()[0]
-            )
+            spend = 0.0 if activity is None else _run_spend(db, activity.run_id)
         campaign_options = "".join(
             f'<option value="{row[0]}">{escape(row[1])}</option>' for row in campaigns
         )
@@ -364,6 +371,14 @@ class JobQueue:
             f'<div class="heading"><h1>Production jobs</h1></div>{notice}{status}'
             f'<section class="panel job-panel"><h2>New English video</h2>{form}</section>{resume}',
         )
+
+
+def _run_spend(db: sqlite3.Connection, run_id: str) -> float:
+    row = db.execute(
+        "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM api_calls WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    return float(row[0])
 
 
 def _limits_fields(target: int = DEFAULT_TARGET) -> str:

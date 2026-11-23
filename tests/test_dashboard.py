@@ -13,7 +13,7 @@ from montaj.budget import Budget
 from montaj.cli import app
 from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
-from montaj.dashboard import dashboard_response
+from montaj.dashboard import LiveJob, dashboard_response
 from montaj.dashboard_jobs import (
     JOBS_PATH,
     JobQueue,
@@ -849,3 +849,313 @@ def test_handle_preview_passes_live_job_state_to_the_board(
         threads[0].join(timeout=5)
     read_only = handle_preview(settings, "/dashboard")[2].decode()
     assert "<form" not in read_only and 'http-equiv="refresh"' not in read_only
+
+
+def _detail_page(
+    db_path: Path,
+    *,
+    operations: bool = True,
+    running: tuple[int, str] | None = None,
+    live: LiveJob | None = None,
+) -> str:
+    status, _, body = dashboard_response(
+        Settings(data_dir=db_path.parent),
+        "/dashboard/sources/7",
+        "",
+        operations=operations,
+        running=running,
+        token="detail-token",
+        live=live,
+    )
+    assert status == 200
+    return body.decode()
+
+
+def _imported(db_path: Path, *extra: str) -> None:
+    folder = db_path.parent / "sources/7"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "meta.json").write_text(
+        SourceMetadata(
+            title="Interview", duration=72, video_hash="video", audio_hash="audio"
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    for name in ("video.mp4", "audio.wav", *extra):
+        (folder / name).write_bytes(b"fixture")
+
+
+def _stage_lines(page: str) -> dict[str, str]:
+    """The markup of each stage line, keyed by its label."""
+    block = page.split('<ol class="steps stage-lines"', 1)[1].split("</ol>", 1)[0]
+    lines = block.split("<li")[1:]
+    return {
+        line.split('class="cell-name">', 1)[1].split("<", 1)[0]: line for line in lines
+    }
+
+
+def test_detail_lists_every_stage_with_status_and_action(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path)
+    lines = _stage_lines(_detail_page(db_path))
+    assert list(lines) == [
+        "Ingest",
+        "Transcribe",
+        "Candidates + rank",
+        "Cut + captions",
+        "Draft + check",
+        "Review",
+        "Export",
+    ]
+    assert "Done" in lines["Ingest"] and "<a" not in lines["Ingest"]
+    assert (
+        "Pending" in lines["Transcribe"] and "Run (confirm cost)" in lines["Transcribe"]
+    )
+    for label in ("Candidates + rank", "Cut + captions", "Draft + check"):
+        assert "Blocked" in lines[label] and "Transcribe first" in lines[label]
+        assert "<a" not in lines[label] and "<button" not in lines[label]
+    for label in ("Review", "Export"):
+        assert "<a" not in lines[label] and "<button" not in lines[label]
+    with connect(db_path) as db:
+        db.execute("UPDATE sources SET speech_status = 'failed' WHERE id = 7")
+    failed = _stage_lines(_detail_page(db_path))["Transcribe"]
+    assert "Failed" in failed and "Montaj recorded a source failure" in failed
+    assert "Retry (confirm cost)" in failed and "retry=yes" in failed
+    assert "Run (confirm cost)" not in failed
+
+
+def test_paid_stage_links_to_confirm_and_free_stage_posts_directly(
+    db_path: Path,
+) -> None:
+    _add_source(db_path)
+    _imported(db_path)
+    paid = _stage_lines(_detail_page(db_path))["Transcribe"]
+    assert 'href="/dashboard/sources/7/confirm?stage=transcribe"' in paid
+    assert "<form" not in paid and "<button" not in paid
+    _imported(db_path, "transcript.json", "candidates.json", "rank.json")
+    free = _stage_lines(_detail_page(db_path))["Cut + captions"]
+    assert 'action="/dashboard/stage" method="post"' in free
+    assert 'name="token" value="detail-token"' in free
+    assert 'name="source" value="7"' in free and 'name="stage" value="render"' in free
+    assert "retry" not in free and "confirm" not in free
+    assert free.count("<button") == 1 and "/confirm" not in free
+
+
+def test_detail_read_only_shows_status_but_no_controls(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path)
+    page = _detail_page(db_path, operations=False)
+    assert "Pending" in _stage_lines(page)["Transcribe"]
+    assert "<form" not in page and "<button" not in page and "/confirm" not in page
+
+
+def test_detail_buttons_are_disabled_while_a_job_runs(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path, "transcript.json", "candidates.json", "rank.json")
+    page = _detail_page(db_path, running=(2, "render"))
+    free = _stage_lines(page)["Cut + captions"]
+    assert "<button disabled" in free and "<form" not in free
+    assert "Another job is running (source 2)" in free
+    assert 'aria-describedby="why-render"' in free and 'id="why-render"' in free
+    assert "<form" not in page and "/confirm" not in page
+    (db_path.parent / "sources/7/transcript.json").unlink()
+    paid = _stage_lines(_detail_page(db_path, running=(0, "batch")))["Transcribe"]
+    assert "<button disabled" in paid and "/confirm" not in paid
+    assert "Another job is running" in paid and "(source" not in paid
+
+
+def test_detail_links_to_clip_preview(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path)
+    assert "Preview clips" not in _detail_page(db_path)
+    _add_clip(db_path, ClipStatus.CHECKED)
+    page = _detail_page(db_path)
+    assert 'href="/?source=7">Preview clips' in page
+    lines = _stage_lines(page)
+    assert 'href="/?source=7"' in lines["Review"] and "Open review" in lines["Review"]
+    assert "Open review" not in lines["Export"]
+
+
+def test_detail_header_shows_campaign_and_source_spend(db_path: Path) -> None:
+    with connect(db_path) as db:
+        db.execute(
+            "INSERT INTO campaigns (id, name, platform, rules_json) VALUES (3, ?, 'tiktok', '{}')",
+            ("<b>Spring</b>",),
+        )
+        insert(
+            db,
+            Source(
+                id=7,
+                path="input.mp4",
+                title="Interview",
+                niche=Niche.HEALTH,
+                campaign_id=3,
+                source_allowed=True,
+                allowed_basis="Creator approval",
+            ),
+        )
+        log_api_call(db, 7, "transcribe", Service.DEEPGRAM, Usage(seconds=1), 0.5)
+    page = _detail_page(db_path)
+    assert "&lt;b&gt;Spring&lt;/b&gt;" in page and "<b>Spring" not in page
+    assert "$0.500000 of $2.00 source ceiling" in page
+
+
+def test_detail_shows_live_job_panel(db_path: Path) -> None:
+    _add_source(db_path)
+    running = LiveJob(7, "Transcribing", True, 12.4, 0.25, "", "")
+    page = _detail_page(db_path, running=(7, "transcribe"), live=running)
+    assert "Transcribing" in page and "Elapsed 12 s" in page and "$0.250000" in page
+    assert '<meta http-equiv="refresh" content="3">' in page
+    done = LiveJob(
+        7,
+        "Starting",
+        False,
+        3.0,
+        0.1,
+        "Stopped during transcribe.",
+        "<i>Another process holds the lock (pid 5)</i>",
+    )
+    finished = _detail_page(db_path, live=done)
+    assert "Stopped during transcribe." in finished
+    assert "&lt;i&gt;Another process holds the lock (pid 5)&lt;/i&gt;" in finished
+    assert "<i>" not in finished and 'http-equiv="refresh"' not in finished
+    other = LiveJob(8, "x", True, 1, 0, "", "")
+    assert "Live job" not in _detail_page(db_path, live=other)
+    importing = LiveJob(None, "x", True, 1, 0, "", "")
+    assert "Live job" not in _detail_page(db_path, live=importing)
+    assert "Live job" not in _detail_page(db_path)
+
+
+def test_job_queue_reports_its_live_job_with_run_spend(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    assert jobs.live_job() is None
+    threads = _capture_threads(monkeypatch)
+    started, finish = Event(), Event()
+
+    def blocked_stage(*_: object, **__: object) -> StageResult:
+        started.set()
+        assert finish.wait(timeout=5)
+        return StageResult("Cut 2 clips.", "One clip skipped.")
+
+    monkeypatch.setattr("montaj.dashboard_jobs.run_board_stage", blocked_stage)
+    jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
+    try:
+        assert started.wait(timeout=5)
+        activity = jobs.snapshot()
+        assert activity is not None
+        with connect(db_path) as db:
+            log_api_call(
+                db,
+                7,
+                "draft",
+                Service.DEEPGRAM,
+                Usage(seconds=1),
+                0.25,
+                reservation=activity.run_id,
+            )
+        live = jobs.live_job()
+        assert live is not None and live.running and live.source_id == 7
+        assert live.spend == 0.25 and live.elapsed_s >= 0
+        detail = handle_preview(settings, "/dashboard/sources/7", jobs)[2].decode()
+        assert "Elapsed" in detail and "$0.250000" in detail
+    finally:
+        finish.set()
+        threads[0].join(timeout=5)
+    done = jobs.live_job()
+    assert done is not None and not done.running
+    assert (done.summary, done.problem) == ("Cut 2 clips.", "One clip skipped.")
+
+
+def _confirm(
+    settings: Settings, jobs: JobQueue | None, source: int, query: str
+) -> tuple[int, bytes]:
+    status, _, body = handle_preview(
+        settings, f"/dashboard/sources/{source}/confirm?{query}", jobs
+    )
+    return status, body
+
+
+def test_confirm_page_shows_estimate_lines_and_confirm_form(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    seen: list[tuple[int, str, float]] = []
+
+    def fake_estimate(
+        settings: Settings, source: int, until: str, language: str, budget: Budget
+    ) -> list[str]:
+        seen.append((source, until, budget.per_run))
+        return ["Transcription: $0.10", "Total <b>$0.10</b>"]
+
+    monkeypatch.setattr("montaj.dashboard_jobs.estimate_run", fake_estimate)
+    status, body = _confirm(settings, jobs, 7, "stage=rank")
+    page = body.decode()
+    assert status == 200 and seen == [(7, "rank", settings.max_cost_per_run_usd)]
+    assert "Transcription: $0.10" in page and "Total &lt;b&gt;$0.10&lt;/b&gt;" in page
+    assert "<b>" not in page
+    assert 'action="/dashboard/stage" method="post"' in page
+    for field in (
+        f'name="token" value="{jobs.token}"',
+        'name="source" value="7"',
+        'name="stage" value="rank"',
+        'name="confirm" value="yes"',
+    ):
+        assert field in page
+    assert 'name="retry"' not in page and page.count("<button") == 1
+    assert 'href="/dashboard/sources/7">Cancel' in page
+    retry = _confirm(settings, jobs, 7, "stage=rank&retry=yes")[1].decode()
+    assert 'name="retry" value="yes"' in retry
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ValueError("raw /secret/path detail"),
+        MediaError("raw ffmpeg detail"),
+        OSError("raw os detail"),
+    ],
+)
+def test_confirm_page_hides_a_failed_estimate(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+
+    def failing(*_: object, **__: object) -> list[str]:
+        raise error
+
+    monkeypatch.setattr("montaj.dashboard_jobs.estimate_run", failing)
+    status, body = _confirm(settings, JobQueue(settings), 7, "stage=transcribe")
+    page = body.decode()
+    assert status == 200
+    assert "Estimate unavailable. Check the source before running this stage." in page
+    assert "raw" not in page and "<form" not in page and "<button" not in page
+    assert 'href="/dashboard/sources/7"' in page
+
+
+@pytest.mark.parametrize(
+    ("source", "query"),
+    [(7, "stage=bogus"), (7, ""), (7, "stage=render"), (99, "stage=rank")],
+)
+def test_confirm_unknown_stage_is_404(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, source: int, query: str
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    monkeypatch.setattr(
+        "montaj.dashboard_jobs.estimate_run", lambda *a, **k: ["never shown"]
+    )
+    status, body = _confirm(settings, JobQueue(settings), source, query)
+    assert status == 404 and b"never shown" not in body
+    assert b"not found" in body.lower()
+
+
+def test_confirm_page_is_not_served_read_only(db_path: Path) -> None:
+    _add_source(db_path)
+    status, _ = _confirm(Settings(data_dir=db_path.parent), None, 7, "stage=rank")
+    assert status == 404

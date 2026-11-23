@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from montaj.budget import Budget
 from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.db import connect, fetch
@@ -18,9 +19,12 @@ from montaj.models import ClipStatus, Source
 
 if TYPE_CHECKING:
     from montaj.board import BoardRow, StageCell
+    from montaj.stage_jobs import BoardStage
 
 BASE_PATH = "/dashboard"
+STAGE_PATH = f"{BASE_PATH}/stage"
 _JOBS_LINK = f"{BASE_PATH}/jobs"
+_CONFIRM_SUFFIX = "/confirm"
 _REFRESH_SECONDS = 3
 _STATE_LABELS = {
     "done": "Done",
@@ -204,6 +208,19 @@ def _badge(text: str, tone: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class LiveJob:
+    """A snapshot of the dashboard's current or latest background job."""
+
+    source_id: int | None
+    stage: str
+    running: bool
+    elapsed_s: float
+    spend: float | None
+    summary: str
+    problem: str
+
+
+@dataclass(frozen=True, slots=True)
 class _BoardContext:
     """What the board needs besides the rows: live job state and write access."""
 
@@ -212,6 +229,34 @@ class _BoardContext:
     token: str = ""
     notice: str = ""
     run_spend: tuple[float, float] | None = None
+    live: LiveJob | None = None
+    campaign: str = ""
+    source_ceiling: float = 0.0
+
+
+def _hidden(**fields: str | int) -> str:
+    return "".join(
+        f'<input type="hidden" name="{name}" value="{escape(str(value), quote=True)}">'
+        for name, value in fields.items()
+    )
+
+
+def _link_button(href: str, label: str) -> str:
+    """A primary link. The caller passes an href that is already HTML-safe."""
+    return f'<a class="button primary" href="{href}">{escape(label)}</a>'
+
+
+def _busy_html(label: str, running: tuple[int, str], describe: str = "") -> str:
+    """A disabled button and why. `describe` links the two for screen readers."""
+    reason = "Another job is running"
+    if running[0]:
+        reason += f" (source {running[0]})"
+    by = f' aria-describedby="{describe}"' if describe else ""
+    anchor = f' id="{describe}"' if describe else ""
+    return (
+        f'<button disabled class="button"{by}>{escape(label)}</button>'
+        f'<span class="secondary"{anchor}>{reason}</span>'
+    )
 
 
 def _cell_html(cell: "StageCell") -> str:
@@ -233,18 +278,10 @@ def _notes_html(cells: tuple["StageCell", ...]) -> str:
 
 def _resume_html(source_id: int, label: str, ctx: _BoardContext) -> str:
     if ctx.running is not None:
-        number = ctx.running[0]
-        reason = "Another job is running"
-        if number:
-            reason += f" (source {number})"
-        return (
-            f'<button disabled class="button">{escape(label)}</button>'
-            f'<span class="secondary">{reason}</span>'
-        )
+        return _busy_html(label, ctx.running)
     return (
         f'<form class="row-action" action="{_JOBS_LINK}" method="post">'
-        f'<input type="hidden" name="token" value="{escape(ctx.token, quote=True)}">'
-        f'<input type="hidden" name="resume" value="{source_id}">'
+        f"{_hidden(token=ctx.token, resume=source_id)}"
         f'<button class="button primary">{escape(label)}</button></form>'
     )
 
@@ -260,7 +297,7 @@ def _action_html(row: "BoardRow", ctx: _BoardContext) -> str:
         "export": f"/?source={source_id}&amp;ready=1",
         "fix": f"{BASE_PATH}/sources/{source_id}",
     }[action.kind]
-    return f'<a class="button primary" href="{target}">{escape(action.label)}</a>'
+    return _link_button(target, action.label)
 
 
 def _row_html(row: "BoardRow", ctx: _BoardContext) -> str:
@@ -374,7 +411,133 @@ def _overview(
     )
 
 
-def _detail(source: SourceSnapshot) -> bytes:
+def _campaign_name(settings: Settings, source_id: int) -> str:
+    with connect(settings.db_path, read_only=True) as db:
+        row = db.execute(
+            """SELECT campaigns.name FROM sources
+               JOIN campaigns ON campaigns.id = sources.campaign_id
+               WHERE sources.id = ?""",
+            (source_id,),
+        ).fetchone()
+    return str(row[0]) if row else ""
+
+
+def confirm_source_id(path: str) -> int | None:
+    """The source ID of a `/dashboard/sources/<id>/confirm` path, else None."""
+    prefix = f"{BASE_PATH}/sources/"
+    if not (path.startswith(prefix) and path.endswith(_CONFIRM_SUFFIX)):
+        return None
+    return parse_source_id(path.removeprefix(prefix).removesuffix(_CONFIRM_SUFFIX))
+
+
+def _detail_path(source_id: int) -> str:
+    return f"{BASE_PATH}/sources/{source_id}"
+
+
+def _stage_action_html(cell: "StageCell", source_id: int, ctx: _BoardContext) -> str:
+    """Run for a pending stage and Retry for a failed one. Paid stages confirm cost first."""
+    from montaj.stage_jobs import PAID_STAGES, BoardStage  # imports this module
+
+    if not ctx.operations or cell.state.value not in {"pending", "failed"}:
+        return ""
+    try:
+        stage = BoardStage(cell.key)
+    except ValueError:
+        return ""  # ingest, review and export are not single-stage jobs
+    retry = cell.state.value == "failed"
+    label = "Retry" if retry else "Run"
+    if ctx.running is not None:
+        return _busy_html(label, ctx.running, f"why-{cell.key}")
+    if stage in PAID_STAGES:
+        href = f"{_detail_path(source_id)}{_CONFIRM_SUFFIX}?stage={stage.value}"
+        return _link_button(
+            escape(href + ("&retry=yes" if retry else "")), f"{label} (confirm cost)"
+        )
+    fields = _hidden(token=ctx.token, source=source_id, stage=stage.value)
+    if retry:
+        fields += _hidden(retry="yes")
+    return (
+        f'<form class="row-action" action="{STAGE_PATH}" method="post">{fields}'
+        f'<button class="button primary">{label}</button></form>'
+    )
+
+
+def _stage_line_html(row: "BoardRow", cell: "StageCell", ctx: _BoardContext) -> str:
+    source = row.snapshot
+    state = cell.state.value
+    reason = (
+        f'<span class="secondary">{escape(cell.reason)}</span>'
+        if cell.reason and state in {"blocked", "failed"}
+        else ""
+    )
+    action = _stage_action_html(cell, source.source_id, ctx)
+    if cell.key == "review" and source.allowed and source.clips[ClipStatus.CHECKED]:
+        action = _link_button(f"/?source={source.source_id}", "Open review")
+    return (
+        f'<li class="stage-line {state}"><div class="stage-info">'
+        f'<span class="cell-name">{escape(cell.label)}</span>'
+        f'<span class="cell-state">{_STATE_LABELS[state]}</span>{reason}</div>'
+        f'<div class="stage-action">{action}</div></li>'
+    )
+
+
+def _stages_html(row: "BoardRow", ctx: _BoardContext) -> str:
+    lines = "".join(_stage_line_html(row, cell, ctx) for cell in row.cells)
+    return (
+        '<section class="panel"><div class="section-heading"><h2>Stages</h2></div>'
+        f'<ol class="steps stage-lines">{lines}</ol></section>'
+    )
+
+
+def _live_html(live: LiveJob | None, source_id: int) -> str:
+    """The job panel, shown only for the source the job is working on."""
+    if live is None or live.source_id != source_id:
+        return ""
+    spend = f"${live.spend:.6f}" if live.spend is not None else "unavailable"
+    figures = f"<p>Elapsed {live.elapsed_s:.0f} s · Run spend {spend}</p>"
+    if live.running:
+        heading, body = f"Running: {live.stage}", ""
+    else:
+        heading, body = "Latest job", f"<p>{escape(live.summary)}</p>"
+    problem = f"<p>{escape(live.problem)}</p>" if live.problem else ""
+    return (
+        '<section class="panel job-panel" aria-label="Live job">'
+        f"<h2>{escape(heading)}</h2>{body}{figures}{problem}</section>"
+    )
+
+
+def _preview_link(source: SourceSnapshot) -> str:
+    reviewable = (
+        ClipStatus.CAPTIONED,
+        ClipStatus.DRAFTED,
+        ClipStatus.CHECKED,
+        ClipStatus.NEEDS_FIX,
+        ClipStatus.APPROVED,
+        ClipStatus.EXPORTED,
+    )
+    if not (source.allowed and any(source.clips[state] for state in reviewable)):
+        return ""
+    return (
+        f'<a class="button primary" href="/?source={source.source_id}">'
+        'Preview clips <span aria-hidden="true">↗</span></a>'
+    )
+
+
+def _detail_header(source: SourceSnapshot, ctx: _BoardContext) -> str:
+    campaign = f" · Campaign: {escape(ctx.campaign)}" if ctx.campaign else ""
+    spend = (
+        f"Source spend ${source.cost:.6f} of ${ctx.source_ceiling:.2f} source ceiling"
+    )
+    return (
+        f'<div class="heading"><div><div class="eyebrow">Source #{source.source_id} · {source.niche}{campaign}</div>'
+        f'<h1>{escape(source.title)}</h1><p class="secondary">{spend}</p></div>'
+        f'<div class="toolbar">{_badge(source.state, source.tone)}'
+        f'<a class="button" href="{_detail_path(source.source_id)}">Refresh</a></div></div>'
+    )
+
+
+def _detail(row: "BoardRow", ctx: _BoardContext) -> bytes:
+    source = row.snapshot
     steps = (("Ingest", source.media), *source.checkpoints)
     checkpoints = "".join(
         f"<li><span>{label}</span>{_badge(value, 'success' if value in {'Imported', 'Saved'} else 'neutral' if value == 'Pending' else 'warning')}</li>"
@@ -384,22 +547,6 @@ def _detail(source: SourceSnapshot) -> bytes:
         f"<li><span>{_CLIP_LABELS.get(state, state.value.replace('_', ' ').capitalize())}</span><strong>{count}</strong></li>"
         for state in ClipStatus
         if (count := source.clips[state])
-    )
-    review = (
-        f'<a class="button primary" href="/?source={source.source_id}">Preview clips <span aria-hidden="true">↗</span></a>'
-        if source.allowed
-        and any(
-            source.clips[state]
-            for state in (
-                ClipStatus.CAPTIONED,
-                ClipStatus.DRAFTED,
-                ClipStatus.CHECKED,
-                ClipStatus.NEEDS_FIX,
-                ClipStatus.APPROVED,
-                ClipStatus.EXPORTED,
-            )
-        )
-        else ""
     )
     notice = (
         f'<aside class="notice"><strong>Needs attention</strong><p>{escape(source.problem)}</p></aside>'
@@ -419,15 +566,63 @@ def _detail(source: SourceSnapshot) -> bytes:
     return render_dashboard_page(
         source.title,
         f"""<a class="back" href="/dashboard">← Source queue</a>
-<div class="heading"><div><div class="eyebrow">Source #{source.source_id} · {source.niche}</div><h1>{escape(source.title)}</h1></div>
-<div class="toolbar">{_badge(source.state, source.tone)}<a class="button" href="/dashboard/sources/{source.source_id}">Refresh</a></div></div>
+{_detail_header(source, ctx)}
 {notice}<div class="board detail">
-<section class="panel"><div class="section-heading"><h2>Saved checkpoints</h2></div><ol class="steps timeline">{checkpoints}</ol></section>
+<div class="side">{_live_html(ctx.live, source.source_id)}{_stages_html(row, ctx)}
+<section class="panel"><div class="section-heading"><h2>Saved checkpoints</h2></div><ol class="steps timeline">{checkpoints}</ol></section></div>
 <div class="side"><section class="panel"><div class="section-heading"><h2>Source information</h2></div>
 <dl class="facts"><div><dt>Permission</dt><dd>{basis}</dd></div><div><dt>Added</dt><dd>{source.added}</dd></div>
 <div><dt>Duration</dt><dd>{source.duration or "Unknown"}</dd></div><div><dt>Est. API cost</dt><dd>${source.cost:.6f}</dd></div></dl></section>
-<section class="panel"><div class="section-heading"><h2>Clips</h2>{review}</div>{clip_list}</section></div></div>""",
+<section class="panel"><div class="section-heading"><h2>Clips</h2>{_preview_link(source)}</div>{clip_list}</section></div></div>""",
         'aria-current="location"',
+        refresh=ctx.running is not None,
+    )
+
+
+def render_confirm(
+    source_id: int,
+    stage: "BoardStage",
+    lines: list[str],
+    token: str,
+    *,
+    retry: bool = False,
+) -> bytes:
+    """The estimate for a paid stage and the one click that accepts its cost."""
+    items = "".join(f"<li>{escape(line)}</li>" for line in lines)
+    fields = _hidden(token=token, source=source_id, stage=stage.value, confirm="yes")
+    if retry:
+        fields += _hidden(retry="yes")
+    return render_dashboard_page(
+        "Confirm cost",
+        f"""<a class="back" href="{_detail_path(source_id)}">← Source #{source_id}</a>
+<div class="heading"><h1>Confirm cost</h1></div>
+<section class="panel job-panel"><h2>{escape(stage.value.capitalize())} for source #{source_id}</h2>
+<ul class="estimate">{items}</ul>
+<form class="job-form" action="{STAGE_PATH}" method="post">{fields}
+<button class="button primary">Confirm and run</button></form>
+<a class="button" href="{_detail_path(source_id)}">Cancel</a></section>""",
+    )
+
+
+def render_confirm_unavailable(source_id: int) -> bytes:
+    """No estimate, so nothing to confirm. Only a way back."""
+    return render_dashboard_page(
+        "Confirm cost",
+        f"""<a class="back" href="{_detail_path(source_id)}">← Source #{source_id}</a>
+<div class="heading"><h1>Confirm cost</h1></div>
+<section class="panel job-panel"><p>Estimate unavailable. Check the source before running this stage.</p>
+<a class="button" href="{_detail_path(source_id)}">Back to source</a></section>""",
+    )
+
+
+def not_found_response() -> tuple[int, str, bytes]:
+    return (
+        404,
+        "text/html; charset=utf-8",
+        render_dashboard_page(
+            "Source not found",
+            '<h1>Source not found</h1><a href="/dashboard">All sources</a>',
+        ),
     )
 
 
@@ -441,6 +636,7 @@ def dashboard_response(
     token: str = "",
     notice: str = "",
     run_spend: tuple[float, float] | None = None,
+    live: LiveJob | None = None,
 ) -> tuple[int, str, bytes]:
     html = "text/html; charset=utf-8"
     if path == f"{BASE_PATH}/style.css":
@@ -459,23 +655,15 @@ def dashboard_response(
             else None
         )
         if source_id is None:
-            return (
-                404,
-                html,
-                render_dashboard_page(
-                    "Source not found",
-                    '<h1>Source not found</h1><a href="/dashboard">All sources</a>',
-                ),
-            )
+            return not_found_response()
     board: list[BoardRow] = []
-    sources: list[SourceSnapshot] = []
+    campaign = ""
     try:
-        if source_id is None:
-            from montaj.board import build_rows  # board imports this module
+        from montaj.board import build_rows  # board imports this module
 
-            board = build_rows(settings, running=running)
-        else:
-            sources = _load(settings, source_id)
+        board = build_rows(settings, running=running, source_id=source_id)
+        if source_id is not None:
+            campaign = _campaign_name(settings, source_id)
     except (sqlite3.Error, OSError, ValidationError, ValueError):
         return (
             503,
@@ -485,16 +673,12 @@ def dashboard_response(
                 "<h1>Dashboard unavailable</h1><p>Check the data directory and run <code>montaj db init</code> to initialize or migrate the database.</p>",
             ),
         )
+    ceiling = Budget.from_settings(settings, None).per_source
+    context = _BoardContext(
+        operations, running, token, notice, run_spend, live, campaign, ceiling
+    )
     if source_id is None:
-        context = _BoardContext(operations, running, token, notice, run_spend)
         return 200, html, _overview(settings, board, view, context)
-    if not sources:
-        return (
-            404,
-            html,
-            render_dashboard_page(
-                "Source not found",
-                '<h1>Source not found</h1><a href="/dashboard">All sources</a>',
-            ),
-        )
-    return 200, html, _detail(sources[0])
+    if not board:
+        return not_found_response()
+    return 200, html, _detail(board[0], context)
