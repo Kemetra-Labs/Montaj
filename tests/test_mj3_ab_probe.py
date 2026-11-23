@@ -7,6 +7,7 @@ from montaj.captions import load_caption_style
 from montaj.transcribe import Word
 from scripts.mj3_ab_probe import (
     TRUE_PEAK_CEILING,
+    build_parser,
     frame_bounds,
     gap_stats,
     max_linear_target,
@@ -105,3 +106,13 @@ def test_linear_normalization_reaches_target_without_touching_video(
     assert after["input_i"] == pytest.approx(-20.0, abs=0.5)
     assert after["input_tp"] <= TRUE_PEAK_CEILING
     assert video_md5(output) == video_md5(source)
+
+
+def test_cli_paths_must_stay_inside_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    inside = ["--data-dir", "data", "--out-dir", "out", "sweep"]
+    assert build_parser().parse_args(inside).out_dir == tmp_path / "out"
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--data-dir", "data", "--out-dir", "..", "sweep"])

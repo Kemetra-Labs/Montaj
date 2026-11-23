@@ -20,6 +20,7 @@ from montaj.config import Settings
 from montaj.models import Clip
 from montaj.rank import clip_words
 from montaj.transcribe import Transcript, Word
+from scripts.pilot_paths import workspace_path
 
 TRUE_PEAK_CEILING = -2.0
 LOUDNESS_RANGE = 11.0
@@ -394,10 +395,14 @@ def captions_step(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _workspace(value: str) -> Path:
+    return workspace_path(Path(value))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--data-dir", type=_workspace, required=True)
+    parser.add_argument("--out-dir", type=_workspace, required=True)
     parser.add_argument("--clip-id", type=int, default=36)
     commands = parser.add_subparsers(dest="command", required=True)
     audio = commands.add_parser("audio", help="Two-pass linear loudnorm sweep.")
@@ -412,7 +417,7 @@ def build_parser() -> argparse.ArgumentParser:
     pair.add_argument("--pilot-size", type=int, required=True)
     pair.add_argument("--pilot-outline", type=float, required=True)
     pair.add_argument(
-        "--normalized", type=Path, help="Raw render with normalized audio."
+        "--normalized", type=_workspace, help="Raw render with normalized audio."
     )
     pair.add_argument("--times", type=float, nargs="+", default=[5.0, 20.0])
     pair.set_defaults(run=captions_step)
