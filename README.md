@@ -32,7 +32,7 @@ It is built for **one operator** running content-rewards campaigns across three 
 - **Vertical clips, captioned** — `ffmpeg` reframes to 9:16 and burns in word-by-word captions, with an Arabic font bundled.
 - **Hooks that follow the transcript** — two hook options, a caption, and hashtags per clip, written in the target account's style.
 - **Campaign compliance check** — length, banned words, required hashtags, disclosure, duplicate posts, and daily caps are checked before review, and re-checked after every edit.
-- **Human review gate** — watch clips in a read-only local preview, trim, pick a hook, approve or reject. A failed check cannot be approved.
+- **Human review gate** — review each clip in the terminal (trim, pick a hook, approve or reject) or approve and reject it in the dashboard's local clip preview. A failed check cannot be approved, and one flagged clip does not hold back review or export of the others.
 - **Cost ceilings** — per-run and per-source spending caps check the estimated cost before each paid API call. `montaj costs` reports estimated spend and call outcomes.
 - **Resumable stages** — every stage persists its output and is skipped when its inputs have not changed. `run` stops at the first failure and resumes there.
 - **Full audit trail** — SQLite logs every source, clip, check, approval, export, and manual post.
@@ -223,7 +223,7 @@ uv run montaj preview serve       # http://127.0.0.1:8765/ (loopback only)
 uv run montaj preview export 1    # copy renders into one folder with an index page
 ```
 
-`uv run montaj dashboard` starts the local operations dashboard. Open **Production jobs** to submit a YouTube HTTPS URL or a filename under `data/inbox`, monitor progress and spend, or resume an existing source. The dashboard runs one production job at a time. If the dashboard process stops, restart it and resume by source ID to reuse saved stages.
+`uv run montaj dashboard` starts the local production board at `/dashboard`. Start a job from **New job** with a YouTube HTTPS URL or a filename under `data/inbox`. No estimate exists before import, so the form asks you to accept the run and source ceilings. Each source row shows a stage progress strip and one next action. **Resume** and **Retry** show the estimate and run only after you confirm it. Open a source to run, retry or rerun a stage. A stage that spends API money shows its estimate and needs one confirmation. Rerunning reuses saved output while the inputs are unchanged. The board runs one job at a time and shows its progress and spend while it runs. If the dashboard process stops, restart it and use **Resume** on the source row to reuse saved stages. The board assumes the default target of 10 clips, so after a restart use `montaj job --resume ID --top N` for another target. A source that is not imported, or whose ingest failed, is fixed from the terminal with `montaj ingest`. A language mismatch or too little usable speech is not retried from the board. One flagged clip does not block review or export of the other clips. Approving and rejecting clips stays in the clip preview. The board is served on loopback only.
 
 The dashboard worker uses the host's media tools and environment. If your credentials are in a local `.env` file, launch it with `uv run --env-file .env montaj dashboard`. The Docker pilot can run the job from the CLI with `docker compose run --rm montaj job ...`.
 

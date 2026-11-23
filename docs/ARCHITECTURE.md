@@ -22,7 +22,7 @@ Each stage is its own command and can be rerun from its persisted inputs. Reuse 
 6. **captions**: burns word-by-word captions into the raw render (final render).
 7. **draft**: Claude writes 2 hook options and a caption with hashtags per clip, in the style of the target account and the campaign rules.
 8. **check** — Check campaign rules after captions and drafting. Rerun the check after any change made in review. Approval and export require a current check without failures.
-9. **review** — Watch the clip in a read-only preview bound to loopback. On a remote host, access it through an SSH tunnel. Adjust start and end, pick a hook, and approve or reject in the terminal. Edits that change approved content require fresh approval after the check reruns.
+9. **review** — Watch the clip in the preview bound to loopback. On a remote host, access it through an SSH tunnel. Approve or reject in the preview served by `montaj dashboard` (the standalone `montaj preview serve` is read-only). Adjust start and end and pick a hook in the terminal. Edits that change approved content require fresh approval after the check reruns.
 10. **export** — Package approved clips with a current check for manual upload.
 11. **post-log** — Record each manual post against its exported clip and account.
 

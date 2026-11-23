@@ -1,24 +1,31 @@
-from collections.abc import Callable
 from email.message import Message
 from io import BytesIO
 from pathlib import Path
-from threading import Event, Thread
 from unittest.mock import Mock
 from urllib.parse import urlencode
 
 import pytest
 from typer.testing import CliRunner
 
-from montaj.budget import Budget
 from montaj.cli import app
 from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
-from montaj.dashboard_jobs import JOBS_PATH, JobQueue, Submission, dashboard_location
+from montaj.dashboard_jobs import (
+    JOBS_PATH,
+    JobQueue,
+    StageSubmission,
+    dashboard_location,
+)
 from montaj.db import connect, insert
 from montaj.ingest import SourceMetadata
-from montaj.job import JobResult
 from montaj.models import CheckResult, Clip, ClipStatus, Niche, Source
 from montaj.preview import _handler, handle_preview
+from montaj.stage_jobs import BoardStage
+from tests.dashboard_helpers import (
+    _add_source,
+    _capture_threads,
+    _post_request,
+)
 
 
 def test_overview_uses_saved_sources_and_filters_attention(db_path: Path) -> None:
@@ -166,59 +173,6 @@ def test_dashboard_jobs_only_accept_youtube_or_an_inbox_file(db_path: Path) -> N
             dashboard_location(settings, location)
 
 
-def test_dashboard_job_progress_is_per_server_and_resume_uses_source_id(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    settings = Settings(data_dir=db_path.parent)
-    jobs = JobQueue(settings)
-    threads: list[Thread] = []
-    started = Event()
-    finish = Event()
-
-    def worker(
-        *, target: Callable[..., None], args: tuple[object, ...], daemon: bool
-    ) -> Thread:
-        thread = Thread(target=target, args=args, daemon=daemon)
-        threads.append(thread)
-        return thread
-
-    def fake_batch(
-        settings: Settings,
-        source: int,
-        *,
-        top: int,
-        budget: Budget,
-        progress: Callable[[str], None],
-    ) -> JobResult:
-        assert source == 7 and top == 2
-        progress("Checking clips")
-        started.set()
-        assert finish.wait(timeout=5)
-        return JobResult(source, top, ready=[3, 4])
-
-    monkeypatch.setattr("montaj.dashboard_jobs.Thread", worker)
-    monkeypatch.setattr("montaj.dashboard_jobs.produce_batch", fake_batch)
-    jobs.submit(Submission(resume=7, top=2))
-    try:
-        assert started.wait(timeout=5)
-        with pytest.raises(ValueError, match="already running"):
-            jobs.submit(Submission(resume=8, top=2))
-        activity = jobs.snapshot()
-        assert activity is not None and activity.stage == "Checking clips"
-        restarted = JobQueue(settings)
-        assert restarted.snapshot() is None
-    finally:
-        finish.set()
-        threads[0].join(timeout=5)
-    assert not threads[0].is_alive()
-    page = jobs.page()
-    assert b"2/2 clips ready" in page and b"/?source=7&amp;ready=1" in page
-    restarted.submit(Submission(resume=7, top=2))
-    threads[1].join(timeout=5)
-    assert not threads[1].is_alive()
-    assert b"2/2 clips ready" in restarted.page()
-
-
 @pytest.mark.parametrize(
     ("operations", "origin", "valid_token", "status"),
     [
@@ -266,3 +220,180 @@ def test_job_post_requires_the_operations_server_and_same_origin_token(
     else:
         request.send_error.assert_called_once_with(status)
         submit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("operations", "origin", "valid_token", "status"),
+    [
+        (False, "http://127.0.0.1:8765", True, 405),
+        (True, "https://other.example", True, 403),
+        (True, "http://127.0.0.1:8765/path", True, 403),
+        (True, "http://127.0.0.1:8765", False, 403),
+        (True, "http://127.0.0.1:8765", True, 303),
+    ],
+)
+def test_stage_post_requires_token_and_same_origin(
+    db_path: Path,
+    operations: bool,
+    origin: str,
+    valid_token: bool,
+    status: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    submit = Mock()
+    monkeypatch.setattr(jobs, "submit_stage", submit)
+    request = _post_request(
+        settings,
+        jobs if operations else None,
+        {"source": 7, "stage": "render"},
+        origin=origin,
+        token=None if valid_token else "wrong",
+    )
+    if status == 303:
+        request.send_response.assert_called_once_with(303)
+        request.send_header.assert_any_call("Location", "/dashboard/sources/7")
+        submit.assert_called_once()
+        assert submit.call_args.args[0] == StageSubmission(
+            source=7, stage=BoardStage.RENDER
+        )
+    else:
+        request.send_error.assert_called_once_with(status)
+        submit.assert_not_called()
+
+
+def test_stage_post_maps_the_form_to_a_submission(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    submit = Mock()
+    monkeypatch.setattr(jobs, "submit_stage", submit)
+    request = _post_request(
+        settings,
+        jobs,
+        {
+            "source": 7,
+            "stage": "rank",
+            "top": 4,
+            "budget": "2.5",
+            "confirm": "yes",
+            "retry": "yes",
+        },
+    )
+    request.send_response.assert_called_once_with(303)
+    assert submit.call_args.args[0] == StageSubmission(
+        source=7,
+        stage=BoardStage.RANK,
+        top=4,
+        confirm=True,
+        retry=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"source": 7, "stage": "bogus"}, "Choose a valid stage."),
+        ({"source": 7}, "Choose a valid stage."),
+        ({"stage": "render"}, "A valid source ID is required."),
+        ({"source": "abc", "stage": "render"}, "A valid source ID is required."),
+        ({"source": 7, "stage": "render", "top": 0}, "clip target"),
+    ],
+)
+def test_stage_post_rejects_unknown_stage_and_missing_source(
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fields: dict[str, object],
+    message: str,
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    submit = Mock()
+    monkeypatch.setattr(jobs, "submit_stage", submit)
+    request = _post_request(settings, jobs, fields)
+    request.send_response.assert_called_once_with(400)
+    body = request.wfile.getvalue().decode()
+    assert message in body and "Traceback" not in body and "pydantic" not in body
+    submit.assert_not_called()
+
+
+def test_stage_post_shows_a_refused_job_as_a_message(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    refusal = ValueError("Confirm the estimated cost first.")
+    monkeypatch.setattr(jobs, "submit_stage", Mock(side_effect=refusal))
+    request = _post_request(settings, jobs, {"source": 7, "stage": "rank"})
+    request.send_response.assert_called_once_with(400)
+    assert b"Confirm the estimated cost first." in request.wfile.getvalue()
+
+
+def test_unconfirmed_paid_stage_post_is_refused_and_starts_nothing(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    threads = _capture_threads(monkeypatch)
+    runner = Mock()
+    monkeypatch.setattr("montaj.dashboard_jobs.run_board_stage", runner)
+    request = _post_request(settings, jobs, {"source": 7, "stage": "draft"})
+    request.send_error.assert_not_called()
+    request.send_response.assert_called_once_with(400)
+    assert b"Confirm the estimated cost first." in request.wfile.getvalue()
+    assert threads == [] and jobs.snapshot() is None
+    runner.assert_not_called()
+
+
+def _get_request(
+    settings: Settings, jobs: JobQueue | None, path: str, fetch_site: str | None
+) -> Mock:
+    request = object.__new__(_handler(settings, jobs))
+    request.headers = Message()
+    request.headers["Host"] = "127.0.0.1:8765"
+    if fetch_site is not None:
+        request.headers["Sec-Fetch-Site"] = fetch_site
+    request.path = path
+    request.wfile = BytesIO()
+    request.send_error = Mock()
+    request.send_response = Mock()
+    request.send_header = Mock()
+    request.end_headers = Mock()
+    request.do_GET()
+    return request  # type: ignore[return-value]
+
+
+@pytest.mark.parametrize(
+    ("path", "fetch_site", "refused"),
+    [
+        ("/dashboard", "cross-site", True),
+        ("/dashboard/sources/7/confirm?stage=batch", "cross-site", True),
+        ("/dashboard", "same-origin", False),
+        ("/dashboard", "none", False),
+        ("/dashboard", None, False),
+        ("/", "cross-site", False),
+    ],
+)
+def test_cross_site_dashboard_gets_are_refused(
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    fetch_site: str | None,
+    refused: bool,
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    estimate = Mock(return_value=["line"])
+    monkeypatch.setattr(jobs, "estimate_batch", estimate)
+    request = _get_request(settings, jobs, path, fetch_site)
+    if refused:
+        request.send_error.assert_called_once_with(403)
+        request.send_response.assert_not_called()
+        estimate.assert_not_called()
+    else:
+        request.send_error.assert_not_called()
+        request.send_response.assert_called_once_with(200)

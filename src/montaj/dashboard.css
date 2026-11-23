@@ -47,6 +47,7 @@ code { font-size: .9em; color: var(--ink); }
 .primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
 .primary:hover { background: oklch(93% .12 126); }
 .job-panel { display: grid; gap: .8rem; margin-block: 1rem; padding: 1rem; }
+.job-panel > summary { cursor: pointer; font-weight: 670; }
 .job-form { display: grid; gap: .7rem; justify-items: start; }
 .job-form label { display: grid; gap: .2rem; }
 .job-form .inline-field { display: flex; align-items: center; gap: .4rem; }
@@ -102,6 +103,25 @@ tbody .optional { color: var(--muted); }
 .resources dl > div, .facts div { display: grid; gap: .18rem; padding: .72rem 1.05rem; border-top: 1px solid var(--stroke); }
 .resources dt, .facts dt { color: var(--muted); font-size: .74rem; }
 .resources dd, .facts dd { color: var(--ink); font-size: .9rem; font-weight: 620; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.topbar { display: grid; grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); margin-bottom: 1rem; overflow: hidden; }
+.topbar > div { display: grid; gap: .18rem; padding: .72rem 1.05rem; }
+.topbar dt { color: var(--muted); font-size: .74rem; }
+.topbar dd { font-size: 1.04rem; font-weight: 640; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.strip { display: grid; grid-template-columns: repeat(7, minmax(4.4rem, 1fr)); gap: .3rem; margin: 0; padding: 0; list-style: none; min-width: 31rem; }
+.cell { display: grid; gap: .08rem; padding: .3rem .4rem; border: 1px solid var(--stroke); border-radius: .34rem; background: var(--raised); color: var(--muted); font-size: .7rem; line-height: 1.25; }
+.cell-name { font-weight: 560; overflow-wrap: anywhere; }
+.cell-state { font-weight: 700; }
+.cell.done { border-color: var(--success-bg); background: var(--success-bg); color: var(--success); }
+.cell.running { border-color: var(--review); background: var(--review-bg); color: var(--review); }
+.cell.failed { border-style: double; border-width: 3px; border-color: var(--warning); background: var(--warning-bg); color: var(--warning); }
+.cell.blocked { border-style: dashed; background: transparent; }
+.cell-notes { margin: .45rem 0 0; padding: 0; list-style: none; color: var(--muted); font-size: .76rem; }
+.action-cell { white-space: nowrap; }
+.action-cell .secondary { white-space: normal; max-width: 12rem; }
+.row-action { margin: 0; }
+.row-action .button, .action-cell button { cursor: pointer; }
+.action-cell button:disabled { cursor: not-allowed; opacity: .6; }
+tbody th .badge { margin-top: .4rem; }
 .empty { border-top: 1px solid var(--stroke); padding: 2.4rem 1.05rem; }
 .empty p, .empty a { display: block; margin-top: .4rem; color: var(--muted); }
 .back { display: inline-block; margin-bottom: .9rem; text-decoration: none; }
@@ -111,6 +131,18 @@ tbody .optional { color: var(--muted); }
 .steps { margin: 0; padding: 0; list-style: none; }
 .steps li { display: flex; align-items: center; justify-content: space-between; gap: .65rem; min-height: 3rem; padding: .6rem 1.05rem; border-top: 1px solid var(--stroke); font-size: .88rem; }
 .timeline li { min-height: 3.75rem; }
+.stage-lines li { flex-wrap: wrap; align-items: flex-start; }
+.stage-info { display: grid; gap: .1rem; min-width: 0; }
+.stage-info .cell-state { color: var(--muted); font-size: .76rem; }
+.stage-line.done .cell-state { color: var(--success); }
+.stage-line.running .cell-state { color: var(--review); }
+.stage-line.failed .cell-state { color: var(--warning); }
+.stage-info .secondary { margin-top: 0; max-width: 34rem; }
+.stage-action { display: grid; gap: .2rem; justify-items: end; text-align: right; }
+.stage-action .row-action { margin: 0; }
+.stage-action button:not(:disabled) { cursor: pointer; }
+.stage-action button:disabled { cursor: not-allowed; opacity: .6; }
+.estimate { margin: 0; padding-left: 1.2rem; font-size: .88rem; }
 .empty-copy { border-top: 1px solid var(--stroke); padding: .9rem 1.05rem; color: var(--muted); font-size: .85rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
