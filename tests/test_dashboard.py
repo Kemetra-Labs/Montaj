@@ -22,6 +22,8 @@ from montaj.models import CheckResult, Clip, ClipStatus, Niche, Source
 from montaj.preview import _handler, handle_preview
 from montaj.stage_jobs import BoardStage
 from tests.dashboard_helpers import (
+    _add_source,
+    _capture_threads,
     _post_request,
 )
 
@@ -285,7 +287,6 @@ def test_stage_post_maps_the_form_to_a_submission(
         source=7,
         stage=BoardStage.RANK,
         top=4,
-        budget=2.5,
         confirm=True,
         retry=True,
     )
@@ -328,3 +329,71 @@ def test_stage_post_shows_a_refused_job_as_a_message(
     request = _post_request(settings, jobs, {"source": 7, "stage": "rank"})
     request.send_response.assert_called_once_with(400)
     assert b"Confirm the estimated cost first." in request.wfile.getvalue()
+
+
+def test_unconfirmed_paid_stage_post_is_refused_and_starts_nothing(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    threads = _capture_threads(monkeypatch)
+    runner = Mock()
+    monkeypatch.setattr("montaj.dashboard_jobs.run_board_stage", runner)
+    request = _post_request(settings, jobs, {"source": 7, "stage": "draft"})
+    request.send_error.assert_not_called()
+    request.send_response.assert_called_once_with(400)
+    assert b"Confirm the estimated cost first." in request.wfile.getvalue()
+    assert threads == [] and jobs.snapshot() is None
+    runner.assert_not_called()
+
+
+def _get_request(
+    settings: Settings, jobs: JobQueue | None, path: str, fetch_site: str | None
+) -> Mock:
+    request = object.__new__(_handler(settings, jobs))
+    request.headers = Message()
+    request.headers["Host"] = "127.0.0.1:8765"
+    if fetch_site is not None:
+        request.headers["Sec-Fetch-Site"] = fetch_site
+    request.path = path
+    request.wfile = BytesIO()
+    request.send_error = Mock()
+    request.send_response = Mock()
+    request.send_header = Mock()
+    request.end_headers = Mock()
+    request.do_GET()
+    return request  # type: ignore[return-value]
+
+
+@pytest.mark.parametrize(
+    ("path", "fetch_site", "refused"),
+    [
+        ("/dashboard", "cross-site", True),
+        ("/dashboard/sources/7/confirm?stage=batch", "cross-site", True),
+        ("/dashboard", "same-origin", False),
+        ("/dashboard", "none", False),
+        ("/dashboard", None, False),
+        ("/", "cross-site", False),
+    ],
+)
+def test_cross_site_dashboard_gets_are_refused(
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    fetch_site: str | None,
+    refused: bool,
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    estimate = Mock(return_value=["line"])
+    monkeypatch.setattr(jobs, "estimate_batch", estimate)
+    request = _get_request(settings, jobs, path, fetch_site)
+    if refused:
+        request.send_error.assert_called_once_with(403)
+        request.send_response.assert_not_called()
+        estimate.assert_not_called()
+    else:
+        request.send_error.assert_not_called()
+        request.send_response.assert_called_once_with(200)

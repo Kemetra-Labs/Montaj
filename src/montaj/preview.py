@@ -347,6 +347,10 @@ def _board_response(
     )
 
 
+def _is_board_path(path: str) -> bool:
+    return path == BASE_PATH or path.startswith(f"{BASE_PATH}/")
+
+
 def handle_preview(
     settings: Settings, target: str, jobs: JobQueue | None = None
 ) -> tuple[int, str, bytes]:
@@ -360,9 +364,9 @@ def handle_preview(
     confirm_id = confirm_source_id(path)
     if confirm_id is not None:
         return _confirm_response(settings, jobs, confirm_id, query)
-    if path == BASE_PATH or path.startswith(f"{BASE_PATH}/"):
-        view = query.get("view", [""])[0]
-        return _board_response(settings, jobs, path, view, query.get("notice", [""])[0])
+    if _is_board_path(path):
+        # A notice comes only from a refused POST, never from the address.
+        return _board_response(settings, jobs, path, query.get("view", [""])[0], "")
     if path in {"", "/"}:
         source_id = parse_source_id(query["source"][0]) if "source" in query else None
         if "source" in query and source_id is None:
@@ -424,7 +428,7 @@ def _stage_submission(source: int, form: dict[str, str]) -> StageSubmission:
         stage = BoardStage(form.get("stage", ""))
     except ValueError:
         raise ValueError("Choose a valid stage.") from None
-    fields = {key: form[key] for key in ("top", "budget") if form.get(key)}
+    fields = {"top": form["top"]} if form.get("top") else {}
     try:
         return StageSubmission.model_validate(
             {
@@ -436,7 +440,7 @@ def _stage_submission(source: int, form: dict[str, str]) -> StageSubmission:
             }
         )
     except ValidationError:
-        raise ValueError("Check the clip target and budget, then try again.") from None
+        raise ValueError("Check the clip target, then try again.") from None
 
 
 def _job_submission(form: dict[str, str]) -> Submission:
@@ -518,6 +522,12 @@ def _handler(
 
         def do_GET(self) -> None:
             if not self._local_request():
+                return
+            # Browsers mark requests from a foreign page, such as an embed that
+            # would trigger estimate work. A missing header is allowed.
+            cross_site = self.headers.get("Sec-Fetch-Site", "") == "cross-site"
+            if cross_site and _is_board_path(urlsplit(self.path).path):
+                self.send_error(403)
                 return
             try:
                 status, content_type, body = handle_preview(settings, self.path, jobs)

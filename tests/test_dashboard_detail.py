@@ -1,3 +1,4 @@
+import wave
 from pathlib import Path
 
 import pytest
@@ -240,6 +241,8 @@ def test_confirm_page_shows_estimate_lines_and_confirm_form(
         ValueError("raw /secret/path detail"),
         MediaError("raw ffmpeg detail"),
         OSError("raw os detail"),
+        wave.Error("raw wave detail"),
+        EOFError("raw eof detail"),
     ],
 )
 def test_confirm_page_hides_a_failed_estimate(

@@ -197,7 +197,8 @@ def test_handle_preview_passes_live_job_state_to_the_board(
 
     monkeypatch.setattr("montaj.dashboard_jobs.run_board_stage", blocked_stage)
     idle = handle_preview(settings, "/dashboard?notice=Saved+it", jobs)[2].decode()
-    assert "confirm?stage=batch" in idle and "Saved it" in idle
+    # A notice in the address is never shown: only a refused POST passes one.
+    assert "confirm?stage=batch" in idle and "Saved it" not in idle
     assert 'http-equiv="refresh"' not in idle and jobs.run_spend() is None
     jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
     try:
@@ -256,7 +257,7 @@ def test_board_has_new_job_form_with_permission_fields(db_path: Path) -> None:
     assert 'type="checkbox" name="allowed" value="true" required' in form
     assert "I have permission to use this video" in form
     assert 'name="top" type="number" min="1" max="' in form and 'value="10"' in form
-    assert 'name="budget" type="number" min="0" step="0.01"' in form
+    assert 'name="budget" type="number" min="0" max="0.50" step="0.01"' in form
     assert (
         '<input type="checkbox" name="confirm" value="yes" required> I understand '
         "this run spends API credits, up to the run ceiling of $0.50 and the "
@@ -338,7 +339,9 @@ def test_jobs_path_serves_the_board(db_path: Path) -> None:
     assert served[0] == 200 and served[1].startswith("text/html")
     assert served == board
     page = served[2].decode()
-    assert "Production board" in page and "Hello" in page
+    assert "Production board" in page and "Hello" not in page
+    detail = handle_preview(settings, "/dashboard/sources/7?notice=Hello", jobs)
+    assert b"Hello" not in detail[2]
     assert "Production jobs" not in page
 
 

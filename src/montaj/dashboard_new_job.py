@@ -11,11 +11,13 @@ _NO_CAMPAIGN = "Create a campaign with <code>montaj campaign add</code> to start
 _BUSY = "The worker is preparing a batch. You can review other sources while it runs."
 
 
-def _limits_fields() -> str:
+def _limits_fields(ctx: BoardContext) -> str:
+    """An override may only lower the run ceiling; the server refuses a higher one."""
     return (
         f'<label>Target clips <input name="top" type="number" min="1" max="{CANDIDATE_LIMIT}" '
         f'value="{DEFAULT_TARGET}" required></label>'
-        '<label>Budget override (USD, optional) <input name="budget" type="number" min="0" step="0.01"></label>'
+        "<label>Budget override (USD, optional) "
+        f'<input name="budget" type="number" min="0" max="{ctx.run_ceiling:.2f}" step="0.01"></label>'
     )
 
 
@@ -50,7 +52,7 @@ def _form_html(ctx: BoardContext) -> str:
 <label>Niche <select name="niche" required>{_niche_options()}</select></label>
 <label>Permission basis <input name="basis" maxlength="200" required></label>
 <label class="inline-field"><input type="checkbox" name="allowed" value="true" required> I have permission to use this video</label>
-{_limits_fields()}
+{_limits_fields(ctx)}
 {_spend_confirm(ctx)}
 <button class="button primary">Start job</button></form>"""
 

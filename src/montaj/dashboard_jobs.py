@@ -3,6 +3,7 @@
 import logging
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PureWindowsPath
 from secrets import compare_digest, token_urlsafe
@@ -11,17 +12,19 @@ from time import perf_counter
 from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from montaj.budget import Budget
 from montaj.candidates import CANDIDATE_LIMIT
 from montaj.config import Settings
-from montaj.dashboard_parts import LiveJob, permission_reason
+from montaj.dashboard_parts import LiveJob, permission_reason, source_problem
 from montaj.db import connect, fetch
 from montaj.job import _JOB_ERRORS, DEFAULT_TARGET, produce_batch, start_job
+from montaj.media import MediaError
 from montaj.models import Niche, Source
 from montaj.run import estimate_run
 from montaj.stage_jobs import PAID_STAGES, BoardStage, run_board_stage
+from montaj.transcribe import SpeechError
 
 _LOG = logging.getLogger(__name__)
 JOBS_PATH = "/dashboard/jobs"
@@ -46,7 +49,6 @@ class StageSubmission(BaseModel):
     source: int = Field(gt=0)
     stage: BoardStage
     top: int = Field(default=DEFAULT_TARGET, ge=1, le=CANDIDATE_LIMIT)
-    budget: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     confirm: bool = False
     retry: bool = False
 
@@ -67,6 +69,39 @@ _STAGE_LINES = {
 # Stages without an offline price, named as the cost note reads.
 _UNPRICED = {BoardStage.RANK: "candidates and rank", BoardStage.DRAFT: "draft"}
 _CONFIRM_FIRST = "Confirm the estimated cost first."
+_UNEXPECTED = "Unexpected error. See the dashboard terminal, then try again."
+_FILE_PROBLEM = (
+    "A saved file or record could not be read. Check the data directory, "
+    "then try again."
+)
+_MEDIA_PROBLEM = "A media tool failed. Check the source media, then try again."
+_PATH_SEPARATORS = ("/", "\\")
+
+
+def _safe_first_line(text: str) -> str:
+    """The first line of a message, or nothing when it names a file path."""
+    lines = text.strip().splitlines()
+    first = lines[0].strip() if lines else ""
+    return "" if any(sep in first for sep in _PATH_SEPARATORS) else first[:300]
+
+
+def _job_problem(exc: Exception) -> str:
+    """What the live panel shows for a failed job. Paths and raw notes stay in the log."""
+    if isinstance(exc, MediaError) or isinstance(exc.__cause__, MediaError):
+        shown = _safe_first_line(str(exc))
+        if shown == str(exc).strip():
+            return shown
+        problem = shown or _MEDIA_PROBLEM  # the full text goes to the log
+    elif isinstance(exc, OSError | ValidationError):
+        problem = _FILE_PROBLEM
+    elif isinstance(exc, SpeechError) and exc.code == 4:  # holds the raw failure note
+        problem = source_problem("failed", None) or _UNEXPECTED
+    elif isinstance(exc, _JOB_ERRORS):
+        return str(exc)
+    else:
+        problem = _UNEXPECTED
+    _LOG.error("Dashboard job stopped: %s", problem, exc_info=exc)
+    return problem
 
 
 def _caps_line(stages: str, budget: Budget) -> str:
@@ -124,6 +159,7 @@ class Activity:
     finished: float | None = None
     kind: Literal["batch", "stage"] = "batch"
     stage_key: str = ""
+    budget: Budget | None = None
 
 
 class JobQueue:
@@ -157,7 +193,7 @@ class JobQueue:
             )
         else:
             self._require_permitted(submission.resume)
-        budget = Budget.from_settings(self.settings, submission.budget)
+        budget = self._budget(submission.budget)
         with self._lock:
             if self._activity is not None and self._activity.running:
                 raise ValueError("A production job is already running.")
@@ -166,6 +202,7 @@ class JobQueue:
                 source_id=submission.resume,
                 run_id=budget.run_id,
                 target=submission.top,
+                budget=budget,
             )
             self._activity = activity
             try:
@@ -176,38 +213,74 @@ class JobQueue:
                 self._activity = None
                 raise
 
-    def _work(self, activity: Activity, submission: Submission, budget: Budget) -> None:
+    def _budget(self, override: float | None) -> Budget:
+        """The job's ceilings. An override may lower the run ceiling, never raise it."""
+        ceiling = self.settings.max_cost_per_run_usd
+        if override is not None and override > ceiling:
+            raise ValueError(
+                "Set a budget override no higher than the run ceiling "
+                f"of ${ceiling:.2f}."
+            )
+        return Budget.from_settings(self.settings, override)
+
+    def _progress(self, activity: Activity) -> Callable[[str], None]:
         def progress(stage: str) -> None:
             with self._lock:
                 activity.stage = stage
 
+        return progress
+
+    def _guarded(
+        self,
+        activity: Activity,
+        stopped: Callable[[], str],
+        work: Callable[[], tuple[str, str]],
+    ) -> None:
+        """Run a job and always free the slot, even when the thread is torn down."""
         try:
-            source_id = submission.resume
-            if source_id is None:
-                if submission.campaign is None or submission.niche is None:
-                    raise ValueError("Choose a campaign and niche.")
-                progress("Importing permitted video")
-                source_id = start_job(
-                    self.settings,
-                    submission.location,
-                    campaign=submission.campaign,
-                    niche=submission.niche,
-                    allowed=submission.allowed,
-                    basis=submission.basis,
-                )
-                with self._lock:
-                    activity.source_id = source_id
-            result = produce_batch(
-                self.settings,
-                source_id,
-                top=submission.top,
-                budget=budget,
-                progress=progress,
-            )
+            summary, problem = work()
         except Exception as exc:
-            self._end(activity, f"Stopped during {activity.stage.lower()}.", str(exc))
+            self._end(activity, f"Stopped during {stopped()}.", _job_problem(exc))
+        except BaseException:
+            self._end(activity, f"Stopped during {stopped()}.", _UNEXPECTED)
+            raise
         else:
-            self._end(activity, result.summary(), result.stop or "")
+            self._end(activity, summary, problem)
+
+    def _work(self, activity: Activity, submission: Submission, budget: Budget) -> None:
+        self._guarded(
+            activity,
+            lambda: activity.stage.lower(),
+            lambda: self._run_batch(activity, submission, budget),
+        )
+
+    def _run_batch(
+        self, activity: Activity, submission: Submission, budget: Budget
+    ) -> tuple[str, str]:
+        progress = self._progress(activity)
+        source_id = submission.resume
+        if source_id is None:
+            if submission.campaign is None or submission.niche is None:
+                raise ValueError("Choose a campaign and niche.")
+            progress("Importing permitted video")
+            source_id = start_job(
+                self.settings,
+                submission.location,
+                campaign=submission.campaign,
+                niche=submission.niche,
+                allowed=submission.allowed,
+                basis=submission.basis,
+            )
+            with self._lock:
+                activity.source_id = source_id
+        result = produce_batch(
+            self.settings,
+            source_id,
+            top=submission.top,
+            budget=budget,
+            progress=progress,
+        )
+        return result.summary(), result.stop or ""
 
     def _end(self, activity: Activity, summary: str, problem: str) -> None:
         with self._lock:
@@ -253,7 +326,8 @@ class JobQueue:
             return None
         with connect(self.settings.db_path, read_only=True) as db:
             spent = _run_spend(db, activity.run_id)
-        return spent, Budget.from_settings(self.settings, None).per_run
+        budget = activity.budget or Budget.from_settings(self.settings, None)
+        return spent, budget.per_run
 
     def live_job(self) -> LiveJob | None:
         """The current or latest job and its run spend. None before any job."""
@@ -274,7 +348,7 @@ class JobQueue:
 
     def submit_stage(self, submission: StageSubmission) -> None:
         self._require_permitted(submission.source)
-        budget = Budget.from_settings(self.settings, submission.budget)
+        budget = Budget.from_settings(self.settings, None)
         with self._lock:
             if self._activity is not None and self._activity.running:
                 raise ValueError("A production job is already running.")
@@ -287,6 +361,7 @@ class JobQueue:
                 target=submission.top,
                 kind="stage",
                 stage_key=submission.stage.value,
+                budget=budget,
             )
             self._activity = activity
             try:
@@ -312,32 +387,19 @@ class JobQueue:
     def _work_stage(
         self, activity: Activity, submission: StageSubmission, budget: Budget
     ) -> None:
-        def progress(stage: str) -> None:
-            with self._lock:
-                activity.stage = stage
-
-        name = submission.stage.value
-        try:
+        def work() -> tuple[str, str]:
             result = run_board_stage(
                 self.settings,
                 submission.source,
                 submission.stage,
                 top=submission.top,
                 budget=budget,
-                progress=progress,
+                progress=self._progress(activity),
                 retry_failed=submission.retry,
             )
-        except _JOB_ERRORS as exc:
-            self._end(activity, f"Stopped during {name}.", str(exc))
-        except Exception:
-            _LOG.exception("Stage %s failed for source %s", name, submission.source)
-            self._end(
-                activity,
-                f"Stopped during {name}.",
-                "Unexpected error. Rerun the stage.",
-            )
-        else:
-            self._end(activity, result.summary, result.problem)
+            return result.summary, result.problem
+
+        self._guarded(activity, lambda: submission.stage.value, work)
 
 
 def _run_spend(db: sqlite3.Connection, run_id: str) -> float:

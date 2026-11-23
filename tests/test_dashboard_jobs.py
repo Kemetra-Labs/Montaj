@@ -14,11 +14,13 @@ from montaj.dashboard_jobs import (
     Submission,
 )
 from montaj.db import connect
+from montaj.ingest import SourceError
 from montaj.job import JobResult
 from montaj.media import MediaError
-from montaj.models import Niche
+from montaj.models import Niche, Source
 from montaj.preview import handle_preview
 from montaj.stage_jobs import PAID_STAGES, BoardStage, StageResult
+from montaj.transcribe import SpeechError
 from tests.dashboard_helpers import (
     _add_source,
     _capture_threads,
@@ -424,3 +426,157 @@ def test_resume_of_an_unpermitted_or_unknown_source_is_refused_up_front(
         jobs.submit(Submission(resume=source, confirm=True))
     batch.assert_not_called()
     assert threads == [] and jobs.snapshot() is None
+
+
+class _HeldThread:
+    """A thread stand-in that never starts, so a test can run its target."""
+
+    def __init__(
+        self, *, target: Callable[..., None], args: tuple[object, ...], daemon: bool
+    ) -> None:
+        self.target, self.args = target, args
+
+    def start(self) -> None:
+        return None
+
+
+def _held_threads(monkeypatch: pytest.MonkeyPatch) -> list[_HeldThread]:
+    held: list[_HeldThread] = []
+
+    def make(**kwargs: object) -> _HeldThread:
+        thread = _HeldThread(**kwargs)  # type: ignore[arg-type]
+        held.append(thread)
+        return thread
+
+    monkeypatch.setattr("montaj.dashboard_jobs.Thread", make)
+    return held
+
+
+def _submit_both(jobs: JobQueue, kind: str) -> None:
+    if kind == "batch":
+        jobs.submit(Submission(resume=7, confirm=True))
+    else:
+        jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
+
+
+def _invalid_record() -> None:
+    Source.model_validate({"id": "not a number"})
+
+
+def _raiser(error: BaseException | Callable[[], None]) -> Callable[..., object]:
+    def fail(*_: object, **__: object) -> object:
+        if callable(error) and not isinstance(error, BaseException):
+            error()
+        raise error  # type: ignore[misc]
+
+    return fail
+
+
+_RUNNERS = {
+    "batch": "montaj.dashboard_jobs.produce_batch",
+    "stage": "montaj.dashboard_jobs.run_board_stage",
+}
+
+
+@pytest.mark.parametrize("kind", ["batch", "stage"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("secret detail"),
+        OSError("[Errno 2] No such file: '/srv/secret/montaj.db'"),
+        _invalid_record,
+        MediaError("ffmpeg failed\n/srv/secret/video.mp4: invalid data"),
+        MediaError("C:\\secret\\video.mp4: invalid data"),
+        SourceError("/srv/secret/in.mp4: moov atom not found"),
+        SpeechError("Cookie: secret signed URL https://x.example/secret", code=4),
+    ],
+)
+def test_worker_errors_reach_the_panel_as_fixed_wording(
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+    error: BaseException | Callable[[], None],
+) -> None:
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    held = _held_threads(monkeypatch)
+    if isinstance(error, SourceError):
+        error.__cause__ = MediaError(str(error))
+    monkeypatch.setattr(_RUNNERS[kind], _raiser(error))
+    _submit_both(jobs, kind)
+    held[0].target(*held[0].args)
+    activity = jobs.snapshot()
+    assert activity is not None and not activity.running
+    assert activity.summary.startswith("Stopped during")
+    assert activity.problem and "secret" not in activity.problem
+    assert "/" not in activity.problem and "\\" not in activity.problem
+    assert jobs.running() is None
+    assert caplog.records, "the detail is logged on the server"
+
+
+@pytest.mark.parametrize("kind", ["batch", "stage"])
+@pytest.mark.parametrize(
+    "message",
+    [
+        "This source is already being processed by job since 2026-11-23T10:00:00+00:00.",
+        "Rank candidates before processing clips.",
+    ],
+)
+def test_worker_shows_safe_messages_as_written(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, message: str
+) -> None:
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    held = _held_threads(monkeypatch)
+    error = MediaError(message) if "processed" in message else ValueError(message)
+    monkeypatch.setattr(_RUNNERS[kind], _raiser(error))
+    _submit_both(jobs, kind)
+    held[0].target(*held[0].args)
+    activity = jobs.snapshot()
+    assert activity is not None and activity.problem == message
+
+
+@pytest.mark.parametrize("kind", ["batch", "stage"])
+def test_worker_releases_the_slot_when_the_thread_exits(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    held = _held_threads(monkeypatch)
+    monkeypatch.setattr(_RUNNERS[kind], _raiser(SystemExit(3)))
+    _submit_both(jobs, kind)
+    assert jobs.running() is not None
+    with pytest.raises(SystemExit):
+        held[0].target(*held[0].args)
+    activity = jobs.snapshot()
+    assert activity is not None and not activity.running and activity.problem
+    assert jobs.running() is None
+
+
+def test_stage_submission_takes_no_budget_override() -> None:
+    assert "budget" not in StageSubmission.model_fields
+
+
+def test_run_spend_uses_the_ceiling_of_the_running_job(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    _held_threads(monkeypatch)
+    jobs.submit(Submission(resume=7, budget=0.25, confirm=True))
+    assert jobs.run_spend() == (0.0, 0.25)
+
+
+def test_budget_override_above_the_run_ceiling_is_refused(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    held = _held_threads(monkeypatch)
+    above = settings.max_cost_per_run_usd + 0.01
+    with pytest.raises(ValueError, match=r"run ceiling of \$0\.50"):
+        jobs.submit(Submission(resume=7, budget=above, confirm=True))
+    assert held == [] and jobs.snapshot() is None
