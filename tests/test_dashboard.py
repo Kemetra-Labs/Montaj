@@ -1159,3 +1159,41 @@ def test_confirm_page_is_not_served_read_only(db_path: Path) -> None:
     _add_source(db_path)
     status, _ = _confirm(Settings(data_dir=db_path.parent), None, 7, "stage=rank")
     assert status == 404
+
+
+def test_detail_for_an_unpermitted_source_has_no_actions_and_says_why(
+    db_path: Path,
+) -> None:
+    _add_source(db_path, allowed=False, basis="")
+    _add_clip(db_path, ClipStatus.CHECKED)
+    _imported(db_path)
+    page = _detail_page(db_path)
+    for absent in ("<form", "<button", "/confirm", "Open review", "Preview clips"):
+        assert absent not in page
+    lines = _stage_lines(page)
+    assert len(lines) == 7
+    assert all("Blocked" in line for line in lines.values())
+    # Each stage line gives the reason, so it appears once per line.
+    assert page.count("Record permission for this source first.") == len(lines)
+    assert "Record permission for this source before processing it." in page
+
+
+def test_detail_for_a_source_without_a_basis_still_lists_run_but_the_server_refuses(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Known UX gap: the board only checks source_allowed, so a blank basis still
+    # shows Run. submit_stage and the confirm page both refuse such a source.
+    _add_source(db_path, allowed=True, basis="  ")
+    _imported(db_path)
+    page = _detail_page(db_path)
+    assert "Run (confirm cost)" in _stage_lines(page)["Transcribe"]
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    monkeypatch.setattr(
+        "montaj.dashboard_jobs.estimate_run", lambda *a, **k: ["never shown"]
+    )
+    status, body = _confirm(settings, jobs, 7, "stage=transcribe")
+    assert status == 200 and b"never shown" not in body and b"<form" not in body
+    assert b"Estimate unavailable" in body
+    with pytest.raises(ValueError, match="recorded permission"):
+        jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
