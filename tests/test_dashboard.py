@@ -2,7 +2,7 @@ from collections.abc import Callable
 from email.message import Message
 from io import BytesIO
 from pathlib import Path
-from threading import Thread
+from threading import Event, Thread
 from unittest.mock import Mock
 from urllib.parse import urlencode
 
@@ -166,12 +166,14 @@ def test_dashboard_jobs_only_accept_youtube_or_an_inbox_file(db_path: Path) -> N
             dashboard_location(settings, location)
 
 
-def test_dashboard_job_worker_exposes_its_batch_result(
+def test_dashboard_job_progress_is_per_server_and_resume_uses_source_id(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = Settings(data_dir=db_path.parent)
     jobs = JobQueue(settings)
     threads: list[Thread] = []
+    started = Event()
+    finish = Event()
 
     def worker(
         *, target: Callable[..., None], args: tuple[object, ...], daemon: bool
@@ -190,15 +192,31 @@ def test_dashboard_job_worker_exposes_its_batch_result(
     ) -> JobResult:
         assert source == 7 and top == 2
         progress("Checking clips")
+        started.set()
+        assert finish.wait(timeout=5)
         return JobResult(source, top, ready=[3, 4])
 
     monkeypatch.setattr("montaj.dashboard_jobs.Thread", worker)
     monkeypatch.setattr("montaj.dashboard_jobs.produce_batch", fake_batch)
     jobs.submit(Submission(resume=7, top=2))
-    threads[0].join(timeout=5)
+    try:
+        assert started.wait(timeout=5)
+        with pytest.raises(ValueError, match="already running"):
+            jobs.submit(Submission(resume=8, top=2))
+        activity = jobs.snapshot()
+        assert activity is not None and activity.stage == "Checking clips"
+        restarted = JobQueue(settings)
+        assert restarted.snapshot() is None
+    finally:
+        finish.set()
+        threads[0].join(timeout=5)
     assert not threads[0].is_alive()
     page = jobs.page()
     assert b"2/2 clips ready" in page and b"/?source=7&amp;ready=1" in page
+    restarted.submit(Submission(resume=7, top=2))
+    threads[1].join(timeout=5)
+    assert not threads[1].is_alive()
+    assert b"2/2 clips ready" in restarted.page()
 
 
 @pytest.mark.parametrize(
