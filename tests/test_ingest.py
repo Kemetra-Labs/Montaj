@@ -213,10 +213,13 @@ def test_real_download_merge_and_normalization(
             "copy",
             "-f",
             "dash",
-            str(tmp_path / "sample.mpd"),
+            "sample.mpd",
         ],
         check=True,
         timeout=10,
+        # ffmpeg writes DASH segments relative to its working directory on
+        # Windows when the manifest path is absolute, so run it in tmp_path.
+        cwd=tmp_path,
     )
     settings = Settings(data_dir=db_path.parent)
     handler = partial(SimpleHTTPRequestHandler, directory=tmp_path)
