@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from montaj.budget import Budget
 from montaj.candidates import CANDIDATE_LIMIT
 from montaj.config import Settings
-from montaj.dashboard import LiveJob, render_dashboard_page
+from montaj.dashboard_parts import LiveJob, render_dashboard_page
 from montaj.db import connect, fetch
 from montaj.job import _JOB_ERRORS, DEFAULT_TARGET, produce_batch, start_job
 from montaj.models import Niche, Source

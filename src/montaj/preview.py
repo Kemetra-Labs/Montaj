@@ -13,13 +13,9 @@ import typer
 from pydantic import ValidationError
 
 from montaj.config import Settings
-from montaj.dashboard import (
-    BASE_PATH,
-    STAGE_PATH,
+from montaj.dashboard import dashboard_response, not_found_response
+from montaj.dashboard_detail import (
     confirm_source_id,
-    dashboard_response,
-    not_found_response,
-    parse_source_id,
     render_confirm,
     render_confirm_unavailable,
 )
@@ -30,6 +26,7 @@ from montaj.dashboard_jobs import (
     StageSubmission,
     Submission,
 )
+from montaj.dashboard_parts import BASE_PATH, STAGE_PATH, parse_source_id
 from montaj.db import connect, fetch
 from montaj.ingest import source_dir
 from montaj.media import MediaError, source_lock
