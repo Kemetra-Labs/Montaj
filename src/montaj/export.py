@@ -76,7 +76,7 @@ def export_inputs(settings: Settings, source: Source) -> ClipInputs:
     return source_inputs(
         settings,
         source_dir(settings, source.id),
-        rules_hash=input_hash(rules.model_dump(mode="json")),
+        rules_hash=input_hash(rules.compliance_payload()),
     )
 
 

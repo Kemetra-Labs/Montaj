@@ -13,7 +13,7 @@ from montaj.ingest import load_source
 from montaj.media import MediaError, file_hash, run_tool, source_lock
 from montaj.models import Clip, ClipStage, ClipStatus
 from montaj.pipeline import ClipInputs, is_stale, stage_input_hash
-from montaj.rank import load_rank
+from montaj.rank import has_review_decision, load_rank, require_current_rank
 
 CUT_STYLE = "center-1080x1920-h264-aac-30fps-fade015-v1"
 
@@ -85,19 +85,23 @@ def selected_clips(
     directory: Path,
     clip_id: int | None = None,
 ) -> list[Clip]:
-    ids = load_rank(directory).selected_ids
-    if clip_id is not None:
-        if clip_id not in ids:
-            raise ValueError(
-                f"Clip {clip_id} is outside the ranked selection for source {source_id}."
-            )
-        ids = [clip_id]
+    rank = load_rank(directory)
+    ids = rank.selected_ids
     result = []
     with connect(settings.db_path) as db:
+        uses_brief = require_current_rank(db, source_id, directory, rank)
+        if clip_id is not None:
+            if clip_id not in ids:
+                raise ValueError(
+                    f"Clip {clip_id} is outside the ranked selection for source {source_id}."
+                )
+            ids = [clip_id]
         for selected_id in ids:
             clip = fetch(db, Clip, selected_id)
             if clip is None or clip.source_id != source_id:
                 raise ValueError(f"Ranked clip {selected_id} is missing. Rerun rank.")
+            if uses_brief and clip_id is None and has_review_decision(clip):
+                continue
             if clip.status not in (ClipStatus.REJECTED, ClipStatus.POSTED):
                 result.append(clip)
             elif clip_id is not None:

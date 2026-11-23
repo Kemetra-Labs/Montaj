@@ -38,6 +38,15 @@ class Record(BaseModel):
 RuleText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
+class CampaignBrief(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    objective: RuleText
+    target_audience: RuleText
+    key_messages: list[RuleText] = Field(default_factory=list)
+    content_guidance: list[RuleText] = Field(default_factory=list)
+
+
 class CampaignRules(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -51,6 +60,10 @@ class CampaignRules(BaseModel):
     max_posts_per_day: int | None = Field(default=None, ge=1)
     flag_medical_claims: bool = False
     source_must_be_allowed: bool = True
+    brief: CampaignBrief | None = None
+
+    def compliance_payload(self) -> dict[str, object]:
+        return self.model_dump(mode="json", exclude={"brief"})
 
     @field_validator("required_disclosure", mode="before")
     @classmethod

@@ -259,7 +259,7 @@ def check_source(
         inputs = source_inputs(
             settings,
             directory,
-            rules_hash=input_hash(rules.model_dump(mode="json")),
+            rules_hash=input_hash(rules.compliance_payload()),
         )
         for clip in clips:
             if clip.id is None or clip.caption is None or not clip.hook_a:

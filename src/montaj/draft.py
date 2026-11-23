@@ -174,7 +174,7 @@ def draft_source(
     voice = style_notes(source.niche, notes)
     option = input_hash(
         template,
-        rules.model_dump(mode="json"),
+        rules.compliance_payload(),
         voice,
         platform,
         settings.claude_model,
@@ -189,7 +189,7 @@ def draft_source(
         inputs = source_inputs(
             settings,
             directory,
-            rules_hash=input_hash(rules.model_dump(mode="json")),
+            rules_hash=input_hash(rules.compliance_payload()),
             extra={ClipStage.DRAFT: option},
         )
         for clip in clips:
@@ -217,7 +217,7 @@ def draft_source(
                 "style_notes": voice,
                 "platform": platform,
                 "niche": source.niche.value,
-                "rules": rules.model_dump(mode="json"),
+                "rules": rules.compliance_payload(),
             }
             prompt = (
                 template
