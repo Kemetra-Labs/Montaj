@@ -201,7 +201,27 @@ def checks(
         )
     )
     results.append(_disk(settings, free_bytes or disk_free))
+    results.append(_vision(settings))
     return results
+
+
+def _vision(settings: Settings) -> Check:
+    """Smart reframing is optional. Without it, renders use the centered crop."""
+    from montaj.engine import vision_status
+
+    if settings.engine == "legacy":
+        return Check(
+            "smart reframing", True, "off (MONTAJ_ENGINE=legacy)", warning=True
+        )
+    status = vision_status(settings.resolved_yunet_path)
+    if status.ready:
+        return Check("smart reframing", True, status.tag)
+    return Check(
+        "smart reframing",
+        True,
+        f"{status.reason} New renders use the centered crop.",
+        warning=True,
+    )
 
 
 # One cent. The smoke test refuses to send a request priced at or above this.

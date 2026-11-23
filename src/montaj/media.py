@@ -69,6 +69,18 @@ def atomic_text(path: Path, content: str) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def atomic_bytes(path: Path, content: bytes) -> None:
+    temporary: Path | None = None
+    try:
+        with NamedTemporaryFile(dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            output.write(content)
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 # Stage calls may nest within one job. Concurrent threads must acquire the OS lock.
 _held_depth: dict[tuple[int, str], int] = {}
 

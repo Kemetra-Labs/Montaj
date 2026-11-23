@@ -18,7 +18,7 @@ Each stage is its own command and can be rerun from its persisted inputs. Reuse 
 2. **transcribe**: Deepgram Nova-3 API on extracted audio. Output is word-level timestamps in JSON. Long files go in one request when under the API limits; split only if needed.
 3. **candidates**: Claude reads the transcript in overlapping windows and returns candidate moments (start, end, reason, moment type, hook idea). Extra signals (audio energy, laughter, scene cuts) are added in a later phase.
 4. **rank**: a second Claude pass ranks the top candidates globally and applies the campaign rules (length range, topic limits).
-5. **cut**: `ffmpeg` trims each pick and reframes to 9:16 with a centered crop (raw render). Face tracking is optional and only for talking-head sources.
+5. **cut**: one `ffmpeg` pass trims each pick, reframes it to 9:16 and applies a safe loudness gain (raw render). Scene-aware smart reframing uses PySceneDetect and OpenCV YuNet when the optional `vision` extra and model are installed. It falls back to the centered crop for any shot without a reliable face. See [the render engine](render-engine.md).
 6. **captions**: burns word-by-word captions into the raw render (final render).
 7. **draft**: Claude writes 2 hook options and a caption with hashtags per clip, in the style of the target account and the campaign rules.
 8. **check** — Check campaign rules after captions and drafting. Rerun the check after any change made in review. Approval and export require a current check without failures.
@@ -40,7 +40,7 @@ Each stage is its own command and can be rerun from its persisted inputs. Reuse 
 - Python 3.12, `uv` for packages, `typer` for the CLI, `pydantic` for data models, `pytest` for tests, `ruff` and `mypy` for checks.
 - Deepgram Nova-3 for transcription with word timestamps and Arabic dialect support, including Egyptian Arabic. A small wrapper allows another backend such as `faster-whisper` to be swapped in. [Deepgram Nova-3 Arabic release](https://developers.deepgram.com/changelog/2026/1/27)
 - Claude API for scoring and drafting. Prompts live in `prompts/` as files, versioned in git. Every call logs input size and cost.
-- `ffmpeg` for cutting and captions. Optional face tracking with MediaPipe or OpenCV.
+- `ffmpeg` for cutting, loudness and captions. Optional scene-aware reframing with PySceneDetect and OpenCV YuNet (`uv sync --extra vision`, `montaj fetch-model`).
 - Secrets in environment variables, never in git. Check the run and source budgets before each paid API call.
 
 ## Platform facts checked (Nov 2026)
@@ -68,7 +68,7 @@ The weeks are planning estimates. Follow the [v3 build order](https://github.com
 
 **Week 1: core pipeline, no polish.** Project setup, SQLite schema, ingest, transcribe, candidate finding and ranking. Run on 3 real permitted videos. Exit: a list of candidate moments per video that looks sensible when read.
 
-**Week 2 — Cutting.** Cut and reframe to 9:16, burn in word-by-word captions, draft hooks and captions, and check campaign rules. Use a centered crop by default. Face tracking is optional for talking-head clips.
+**Week 2 — Cutting.** Cut and reframe to 9:16, burn in word-by-word captions, draft hooks and captions, and check campaign rules. New renders use the unified engine (scene-aware crop with automatic centered fallback). Clips reviewed under the earlier centered recipe stay on it.
 
 **Week 3 — Review and first posts.** Review queue (trim, pick hook, approve), export and post log. Aim to approve and export ten clips in the first real run. Approve fewer if needed and record what limited the count. Use manual posting on all three accounts and record each post through the CLI. Use the week 3 checkpoint to decide whether the workflow needs changes.
 

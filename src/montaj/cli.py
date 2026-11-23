@@ -16,6 +16,7 @@ from montaj.db import SchemaVersionError, connect, init_db
 from montaj.doctor import Check, checks, online_checks
 from montaj.draft import draft
 from montaj.export import export_clips
+from montaj.faces import VisionUnavailable, check_model, fetch_model
 from montaj.housekeeping import HousekeepingError, backup_database, clean_data
 from montaj.ingest import ingest
 from montaj.job import job
@@ -66,6 +67,26 @@ def _status(check: Check) -> str:
     if check.warning:
         return "WARN"
     return "OK"
+
+
+@app.command("fetch-model")
+def fetch_model_command() -> None:
+    """Download the pinned YuNet face model (MIT) used for smart reframing."""
+    settings = Settings.from_env()
+    target = settings.resolved_yunet_path
+    try:
+        check_model(target)
+    except VisionUnavailable:
+        pass
+    else:
+        typer.echo(f"Face model already installed at {target}.")
+        return
+    try:
+        fetch_model(target)
+    except (OSError, VisionUnavailable) as exc:
+        typer.echo(f"Fetch failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Face model installed at {target} (SHA-256 verified).")
 
 
 @app.command("doctor")

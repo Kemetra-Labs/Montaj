@@ -2,9 +2,18 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from montaj.models import CheckResult, Clip, ClipStage, ClipStatus
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyRecipe:
+    """An earlier render and caption recipe that reviewed clips stay pinned to."""
+
+    cut: str
+    captions: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +22,9 @@ class ClipInputs:
     transcript_hash: str = ""
     rules_hash: str = ""
     stage_options: dict[ClipStage, str] = field(default_factory=dict)
+    legacy: tuple[LegacyRecipe, ...] = ()
+    # The recipe a clip was last rendered and captioned with, by clip ID.
+    recorded: Callable[[int], LegacyRecipe | None] | None = None
 
 
 def input_hash(*parts: object) -> str:
@@ -22,12 +34,59 @@ def input_hash(*parts: object) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _protected(clip: Clip) -> bool:
+    return clip.reviewed_at is not None or clip.status in (
+        ClipStatus.APPROVED,
+        ClipStatus.EXPORTED,
+        ClipStatus.POSTED,
+    )
+
+
+def _recipe(clip: Clip, values: ClipInputs) -> tuple[str | None, str | None]:
+    """Keep a reviewed clip on the recipe it was rendered with.
+
+    A new default engine must not make approved or exported output stale.
+    The pin only holds while the stored hashes still match that older recipe,
+    so a trim, a source change or an explicit upgrade moves the clip forward.
+    """
+    options = values.stage_options
+    cut_option = options.get(ClipStage.CUT)
+    caption_option = options.get(ClipStage.CAPTIONS)
+    if not _protected(clip):
+        return cut_option, caption_option
+    candidates = list(values.legacy)
+    if values.recorded is not None and clip.id is not None:
+        if (recorded := values.recorded(clip.id)) is not None:
+            candidates.insert(0, recorded)
+    bounds = (clip.start_s, clip.end_s)
+    stored_cut = clip.input_hashes.get(ClipStage.CUT)
+    for recipe in candidates:
+        if stored_cut == input_hash(values.source_hash, bounds, recipe.cut):
+            cut_option = recipe.cut
+            break
+    cut_hash = input_hash(values.source_hash, bounds, cut_option)
+    stored_captions = clip.input_hashes.get(ClipStage.CAPTIONS)
+    for recipe in candidates:
+        if recipe.captions is not None and stored_captions == input_hash(
+            cut_hash, values.transcript_hash, recipe.captions
+        ):
+            caption_option = recipe.captions
+            break
+    return cut_option, caption_option
+
+
+def effective_options(clip: Clip, inputs: ClipInputs) -> tuple[str | None, str | None]:
+    """The cut and caption recipes this clip's fingerprints resolve to."""
+    return _recipe(clip, inputs)
+
+
 def _fingerprints(clip: Clip, inputs: ClipInputs | None) -> dict[ClipStage, str]:
     values = inputs or ClipInputs()
     options = values.stage_options
     bounds = (clip.start_s, clip.end_s)
-    cut = input_hash(values.source_hash, bounds, options.get(ClipStage.CUT))
-    captions = input_hash(cut, values.transcript_hash, options.get(ClipStage.CAPTIONS))
+    cut_option, caption_option = _recipe(clip, values)
+    cut = input_hash(values.source_hash, bounds, cut_option)
+    captions = input_hash(cut, values.transcript_hash, caption_option)
     draft = input_hash(
         (values.transcript_hash, bounds) if clip.draft_quotes_clip else None,
         clip.moment_type,

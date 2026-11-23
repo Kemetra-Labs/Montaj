@@ -1,6 +1,9 @@
-"""Render selected moments as centered vertical video."""
+"""Render selected moments as vertical video with the unified engine."""
 
+import dataclasses
+import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Annotated, Protocol
@@ -9,84 +12,56 @@ import typer
 
 from montaj.config import Settings
 from montaj.db import connect, fetch, save_clip
+from montaj.engine import (
+    CUT_STYLE,
+    camera_config,
+    cut_recipe,
+    loudness_policy,
+    recipe_lookup,
+    record_recipe,
+    vision_status,
+)
+from montaj.faces import YuNetDetector
 from montaj.ingest import load_source
-from montaj.loudness import linear_gain_db, measure_loudness
-from montaj.media import MediaError, file_hash, run_tool, source_lock
-from montaj.models import Clip, ClipStage, ClipStatus
-from montaj.pipeline import ClipInputs, is_stale, stage_input_hash
+from montaj.media import MediaError, atomic_text, file_hash, source_lock
+from montaj.models import Clip, ClipStage, ClipStatus, Niche
+from montaj.pipeline import (
+    ClipInputs,
+    LegacyRecipe,
+    effective_options,
+    is_stale,
+    stage_input_hash,
+)
 from montaj.rank import has_review_decision, load_rank, require_current_rank
+from montaj.render import FFmpegRenderer, RenderReport, SmartReframer
 
-CUT_STYLE = "center-1080x1920-h264-aac-30fps-fade015-v1"
+__all__ = ["CUT_STYLE", "FFmpegRenderer", "Renderer", "cut_style", "render_inputs"]
 
 
 class Renderer(Protocol):
-    def render(self, video: Path, output: Path, start: float, end: float) -> None: ...
+    def render(
+        self, video: Path, output: Path, start: float, end: float
+    ) -> RenderReport | None: ...
 
 
-def cut_style(settings: Settings) -> str:
-    """Name the render recipe so a loudness setting change re-renders the clip."""
-    target = settings.loudness_target_lufs
-    if target is None:
-        return CUT_STYLE
-    return f"{CUT_STYLE}+gain-{target:g}lufs-tp-2-v1"
+def cut_style(settings: Settings, niche: Niche | None = None) -> str:
+    """Name the render recipe so any engine or policy change re-renders the clip."""
+    return cut_recipe(settings, niche)
 
 
-class FFmpegRenderer:
-    def __init__(self, loudness_target: float | None = None) -> None:
-        self.loudness_target = loudness_target
-
-    def _gain_db(self, video: Path, start: float, duration: float) -> float:
-        if self.loudness_target is None:
-            return 0.0
-        heard = measure_loudness(video, start=start, duration=duration)
-        return linear_gain_db(heard.integrated, heard.true_peak, self.loudness_target)
-
-    def render(self, video: Path, output: Path, start: float, end: float) -> None:
-        duration = end - start
-        fade = min(0.15, duration / 2)
-        audio_filter = f"afade=t=in:st=0:d={fade:.6f},afade=t=out:st={duration - fade:.6f}:d={fade:.6f}"
-        if gain := self._gain_db(video, start, duration):
-            audio_filter = f"volume={gain:.2f}dB,{audio_filter}"
-        run_tool(
-            "ffmpeg",
-            [
-                "-nostdin",
-                "-v",
-                "error",
-                "-y",
-                "-protocol_whitelist",
-                "file,pipe",
-                "-ss",
-                str(start),
-                "-i",
-                str(video),
-                "-t",
-                str(duration),
-                "-map",
-                "0:v:0",
-                "-map",
-                "0:a:0",
-                "-vf",
-                "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30",
-                "-af",
-                audio_filter,
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "20",
-                "-pix_fmt",
-                "yuv420p",
-                "-threads:v",
-                "2",
-                "-c:a",
-                "aac",
-                "-movflags",
-                "+faststart",
-                str(output),
-            ],
-        )
+def build_renderer(settings: Settings, niche: Niche | None = None) -> FFmpegRenderer:
+    """Smart reframing when it can run here, the centered crop when it cannot."""
+    policy = loudness_policy(settings)
+    if (
+        settings.engine == "legacy"
+        or not vision_status(settings.resolved_yunet_path).ready
+    ):
+        return FFmpegRenderer(policy)
+    model = settings.resolved_yunet_path
+    reframer = SmartReframer(
+        lambda: YuNetDetector(model), lambda crop: camera_config(crop, niche)
+    )
+    return FFmpegRenderer(policy, reframer)
 
 
 def render_inputs(
@@ -95,11 +70,15 @@ def render_inputs(
     options: dict[ClipStage, str] | None = None,
     *,
     style: str = CUT_STYLE,
+    legacy: tuple[LegacyRecipe, ...] = (LegacyRecipe(CUT_STYLE),),
+    recorded: Callable[[int], LegacyRecipe | None] | None = None,
 ) -> ClipInputs:
     return ClipInputs(
         source_hash=file_hash(video),
         transcript_hash=transcript_hash,
         stage_options={ClipStage.CUT: style, **(options or {})},
+        legacy=legacy,
+        recorded=recorded,
     )
 
 
@@ -154,14 +133,20 @@ def render_clip(
     duration = clip.end_s - clip.start_s
     if duration <= 0:
         raise ValueError(f"Clip {clip.id} must have a positive duration.")
+    used, _ = effective_options(clip, inputs)
     output.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=output.parent) as temporary:
         staged = Path(temporary) / "raw.mp4"
         try:
-            renderer.render(video, staged, clip.start_s, clip.end_s)
+            report = renderer.render(video, staged, clip.start_s, clip.end_s)
         except MediaError as exc:
             raise MediaError(f"Clip {clip.id}: {exc}") from exc
         staged.replace(output)
+    if report is not None:
+        atomic_text(
+            output.with_name("render.json"),
+            json.dumps(report.as_json(), indent=2) + "\n",
+        )
     key = stage_input_hash(clip, ClipStage.CUT, inputs)
     changed = clip.input_hashes.get(ClipStage.CUT) != key
     clip.input_hashes[ClipStage.CUT] = key
@@ -174,6 +159,8 @@ def render_clip(
             clip.status = ClipStatus.RENDERED
     with connect(settings.db_path) as db:
         save_clip(db, clip)
+    if used is not None:
+        record_recipe(settings.data_dir, clip.id, used)
     return True
 
 
@@ -184,14 +171,21 @@ def cut_source(
     *,
     renderer: Renderer | None = None,
     wait: float = 0,
+    upgrade: bool = False,
 ) -> tuple[int, int]:
-    _, metadata, directory = load_source(settings, source_id)
+    source, metadata, directory = load_source(settings, source_id)
     video = directory / "video.mp4"
     changed = 0
     with source_lock(directory, command="cut", wait=wait):
         clips = selected_clips(settings, source_id, directory, clip_id)
-        inputs = render_inputs(video, style=cut_style(settings))
-        cutter = renderer or FFmpegRenderer(settings.loudness_target_lufs)
+        inputs = render_inputs(
+            video,
+            style=cut_style(settings, source.niche),
+            recorded=recipe_lookup(settings.data_dir),
+        )
+        if upgrade:
+            inputs = dataclasses.replace(inputs, legacy=(), recorded=None)
+        cutter = renderer or build_renderer(settings, source.niche)
         for clip in clips:
             if clip.end_s > metadata.duration + 0.05:
                 raise ValueError(f"Clip {clip.id} ends after the source video.")
@@ -206,10 +200,19 @@ def cut(
         float,
         typer.Option("--wait", min=0, help="Seconds to wait if this source is locked."),
     ] = 0,
+    upgrade: Annotated[
+        bool,
+        typer.Option(
+            "--upgrade",
+            help="Re-render reviewed clips with the current engine. They return to review.",
+        ),
+    ] = False,
 ) -> None:
     """Render ranked clips as vertical MP4 files."""
     try:
-        rendered, reused = cut_source(Settings.from_env(), source_id, clip, wait=wait)
+        rendered, reused = cut_source(
+            Settings.from_env(), source_id, clip, wait=wait, upgrade=upgrade
+        )
     except (MediaError, OSError, ValueError, sqlite3.Error) as exc:
         typer.echo(f"Cut failed: {exc}", err=True)
         raise typer.Exit(1) from exc
