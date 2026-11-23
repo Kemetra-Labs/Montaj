@@ -47,6 +47,9 @@ class Settings(BaseModel):
     backup_keep: int = Field(default=7, ge=1)
     min_free_mb: float = Field(default=1024, ge=0, allow_inf_nan=False)
     clean_older_than_days: int = Field(default=14, ge=0)
+    loudness_target_lufs: float | None = Field(
+        default=None, ge=-30, le=-14, allow_inf_nan=False
+    )
 
     @property
     def db_path(self) -> Path:
@@ -67,6 +70,7 @@ class Settings(BaseModel):
         anthropic_key = getenv("ANTHROPIC_API_KEY")
         font_path = getenv("MONTAJ_FONT_PATH")
         defaults = cls()
+        loudness = getenv("MONTAJ_LOUDNESS_TARGET_LUFS")
         diarize = getenv("MONTAJ_DEEPGRAM_DIARIZE") or defaults.deepgram_diarize
 
         return cls(
@@ -99,4 +103,5 @@ class Settings(BaseModel):
             clean_older_than_days=int(
                 getenv("MONTAJ_CLEAN_OLDER_THAN_DAYS") or defaults.clean_older_than_days
             ),
+            loudness_target_lufs=float(loudness) if loudness else None,
         )
