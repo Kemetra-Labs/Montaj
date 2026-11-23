@@ -12,3 +12,14 @@ usd_per_minute = 0.0092
 [claude.claude-sonnet-5-5]
 usd_per_million_input_tokens = 2.0
 usd_per_million_output_tokens = 10.0
+
+# Claude Haiku 5.5, model id claude-haiku-5-5. Confirmed 2026-11-23.
+# Priced by prompt length: a request whose prompt is over the threshold pays the
+# long rates for all of its input and output tokens.
+# https://platform.claude.com/docs/en/about-claude/pricing
+[claude.claude-haiku-5-5]
+usd_per_million_input_tokens = 0.10
+usd_per_million_output_tokens = 0.50
+long_prompt_threshold_tokens = 100000
+usd_per_million_input_tokens_long = 0.50
+usd_per_million_output_tokens_long = 2.50

@@ -208,13 +208,17 @@ def test_reported_truncation_is_billed_once_and_a_later_run_can_recover(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = thirty_candidates.model_copy(
-        update={"anthropic_api_key": SecretStr("offline-fake")}
+        update={
+            "anthropic_api_key": SecretStr("offline-fake"),
+            "rank_model": "claude-sonnet-5-5",
+        }
     )
     requests: list[int] = []
 
     def send(request: Request, *, timeout: int) -> BytesIO:
         assert request.data is not None
         payload = json.loads(request.data)
+        assert payload["model"] == "claude-sonnet-5-5"
         assert payload["thinking"] == {"type": "between_tools"}
         requests.append(payload["max_tokens"])
         truncated = len(requests) == 1
@@ -382,4 +386,4 @@ def test_rejected_rank_completion_counts_as_failed_at_reported_usage(
         totals = cost_totals(db, 1)
     assert tuple(row) == (1500, 610, "failure")
     assert totals.approved_clips == 0
-    assert totals.total == pytest.approx(0.0091)
+    assert totals.total == pytest.approx(0.000455)  # Haiku 5.5 short-prompt rates
