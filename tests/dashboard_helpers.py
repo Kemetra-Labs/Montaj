@@ -18,6 +18,7 @@ from montaj.db import connect, insert
 from montaj.ingest import SourceMetadata
 from montaj.models import Clip, ClipStatus, Niche, Source
 from montaj.preview import _handler
+from montaj.rank import RankedClip, RankSet
 
 STAGE_PATH = "/dashboard/stage"
 
@@ -88,9 +89,28 @@ def _rows(page: str) -> str:
     return page.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
 
 
-def _add_clip(db_path: Path, status: ClipStatus, source: int = 7) -> None:
+def _save_rank(db_path: Path, selected: list[int], source: int = 7) -> None:
+    clips = [
+        RankedClip(clip_id=clip_id, score=8, reason="r", selected=True)
+        for clip_id in selected
+    ]
+    (db_path.parent / f"sources/{source}/rank.json").write_text(
+        RankSet(input_hash="h", clips=clips).model_dump_json(), encoding="utf-8"
+    )
+
+
+def _add_clip(
+    db_path: Path, status: ClipStatus, source: int = 7, clip_id: int = 1
+) -> None:
+    """Add a clip and, when a ranking is saved, select it in that ranking."""
     with connect(db_path) as db:
-        insert(db, Clip(id=1, source_id=source, start_s=0, end_s=5, status=status))
+        insert(
+            db, Clip(id=clip_id, source_id=source, start_s=0, end_s=5, status=status)
+        )
+    path = db_path.parent / f"sources/{source}/rank.json"
+    if path.is_file():
+        selected = RankSet.model_validate_json(path.read_bytes()).selected_ids
+        _save_rank(db_path, [*selected, clip_id], source)
 
 
 def _imported(db_path: Path, *extra: str) -> None:
@@ -104,3 +124,7 @@ def _imported(db_path: Path, *extra: str) -> None:
     )
     for name in ("video.mp4", "audio.wav", *extra):
         (folder / name).write_bytes(b"fixture")
+    if "rank.json" in extra:
+        with connect(db_path, read_only=True) as db:
+            rows = db.execute("SELECT id FROM clips WHERE source_id = 7 ORDER BY id")
+            _save_rank(db_path, [int(row[0]) for row in rows])

@@ -1,7 +1,7 @@
 """Run one pipeline stage for a source, for the production board."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -12,12 +12,13 @@ from montaj.check import check_source
 from montaj.claude import LLM
 from montaj.config import Settings
 from montaj.cut import Renderer, cut_source
+from montaj.dashboard_parts import source_problem
 from montaj.db import connect, fetch
 from montaj.draft import draft_source
 from montaj.ingest import load_source
 from montaj.job import _job_rules
 from montaj.media import reuse_file_hash
-from montaj.models import CheckResult, Clip, ClipStatus
+from montaj.models import CheckResult, Clip, ClipStatus, Source
 from montaj.rank import has_review_decision, load_rank, rank_source
 from montaj.transcribe import Transcriber, transcribe_source
 
@@ -54,6 +55,8 @@ class _Run:
     backend: Transcriber | None
     llm: LLM | None
     renderer: Renderer | None
+    # Clips finished so far, so a budget stop can say how far the stage got.
+    finished: list[int] = field(default_factory=list)
 
 
 _END_TOLERANCE_S = 0.05
@@ -106,6 +109,17 @@ def _transcribe(run: _Run) -> StageResult:
         budget=run.budget,
         backend=run.backend,
     )
+    # A cached transcript can return without error while a recorded speech
+    # outcome still stops the next stages, so report that outcome.
+    with connect(run.settings.db_path, read_only=True) as db:
+        source = fetch(db, Source, run.source_id)
+    problem = (
+        source_problem(source.speech_status, source.failure_note) if source else None
+    )
+    if problem:
+        return StageResult(
+            f"Transcription of source {run.source_id} needs attention.", problem
+        )
     return StageResult(f"Transcribed source {run.source_id}.")
 
 
@@ -142,6 +156,7 @@ def _render(run: _Run) -> StageResult:
         cut_source(run.settings, run.source_id, clip_id, renderer=run.renderer)
         run.progress(f"Captioning clip {clip_id}")
         caption_source(run.settings, run.source_id, clip_id)
+        run.finished.append(clip_id)
     if not clips:
         return StageResult(_finish("No clips to render", skipped))
     done = f"Rendered and captioned {_plural(len(clips), 'clip')}"
@@ -165,6 +180,7 @@ def _draft(run: _Run) -> StageResult:
         run.progress(f"Checking clip {clip_id}")
         [(_, outcome)] = check_source(run.settings, run.source_id, clip_id=clip_id)
         tally[outcome.result].append(clip_id)
+        run.finished.append(clip_id)
     if not clips:
         return StageResult(_finish("No clips to draft", skipped))
     passed, warned, failed = (
@@ -232,4 +248,9 @@ def run_board_stage(
         with reuse_file_hash(directory / "video.mp4"):
             return _STAGES[stage](run)
     except BudgetExceeded as exc:
-        return StageResult(f"Stopped during {stage.value}.", problem=str(exc))
+        after = (
+            f" after {_plural(len(run.finished), 'clip')}"
+            if stage in (BoardStage.RENDER, BoardStage.DRAFT)
+            else ""
+        )
+        return StageResult(f"Stopped during {stage.value}{after}.", problem=str(exc))

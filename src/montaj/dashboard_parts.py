@@ -32,6 +32,28 @@ def permission_reason(allowed: bool, basis: str | None) -> str:
     return ""
 
 
+def source_problem(speech_status: str | None, failure_note: str | None) -> str | None:
+    """Fixed guidance for a recorded speech or source failure, or None.
+
+    Stored notes may hold raw tool output or signed URLs, so only a fixed
+    sentence chosen by keyword is ever shown.
+    """
+    if speech_status == "language_mismatch":
+        return "The transcript language differs from the requested language. Check the transcription settings."
+    if speech_status == "no_usable_speech":
+        return "The source has insufficient usable speech. Check the source audio."
+    if speech_status != "failed":
+        return None
+    note = (failure_note or "").casefold()
+    if "javascript runtime" in note:
+        return "Install Deno or rebuild the Montaj image, then run montaj doctor."
+    if "ejs solver" in note:
+        return "Restore the matching EJS solver or rebuild the Montaj image, then run montaj doctor."
+    if "format" in note and "available" in note:
+        return "No usable media format was found. Check the source or obtain a permitted copy."
+    return "Montaj recorded a source failure. Check the locally reported error before retrying."
+
+
 def render_dashboard_page(
     title: str, content: str, active: str = "", refresh: bool = False
 ) -> bytes:
@@ -91,11 +113,19 @@ def link_button(href: str, label: str) -> str:
     return f'<a class="button primary" href="{href}">{escape(label)}</a>'
 
 
-def busy_html(label: str, running: tuple[int, str], describe: str = "") -> str:
-    """A disabled button and why. `describe` links the two for screen readers."""
-    reason = "Another job is running"
-    if running[0]:
-        reason += f" (source {running[0]})"
+def busy_html(
+    label: str, running: tuple[int, str], describe: str = "", source_id: int = 0
+) -> str:
+    """A disabled button and why. `describe` links the two for screen readers.
+
+    On the running source's own controls the reason is just "Running".
+    """
+    if source_id and running[0] == source_id:
+        reason = "Running"
+    else:
+        reason = "Another job is running"
+        if running[0]:
+            reason += f" (source {running[0]})"
     by = f' aria-describedby="{describe}"' if describe else ""
     anchor = f' id="{describe}"' if describe else ""
     return (

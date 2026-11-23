@@ -28,6 +28,7 @@ from tests.dashboard_helpers import (
 def test_dashboard_job_progress_is_per_server_and_resume_uses_source_id(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _add_source(db_path)
     settings = Settings(data_dir=db_path.parent)
     jobs = JobQueue(settings)
     threads: list[Thread] = []
@@ -61,7 +62,7 @@ def test_dashboard_job_progress_is_per_server_and_resume_uses_source_id(
     try:
         assert started.wait(timeout=5)
         with pytest.raises(ValueError, match="already running"):
-            jobs.submit(Submission(resume=8, top=2))
+            jobs.submit(Submission(resume=7, top=2))
         activity = jobs.snapshot()
         assert activity is not None and activity.stage == "Checking clips"
         restarted = JobQueue(settings)
@@ -326,3 +327,25 @@ def test_job_queue_reports_its_live_job_with_run_spend(
     done = jobs.live_job()
     assert done is not None and not done.running
     assert (done.summary, done.problem) == ("Cut 2 clips.", "One clip skipped.")
+
+
+@pytest.mark.parametrize(
+    ("allowed", "basis", "source"),
+    [(False, "Creator approval", 7), (True, "  ", 7), (True, "Creator approval", 99)],
+)
+def test_resume_of_an_unpermitted_or_unknown_source_is_refused_up_front(
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allowed: bool,
+    basis: str,
+    source: int,
+) -> None:
+    _add_source(db_path, allowed=allowed, basis=basis)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    batch = Mock()
+    monkeypatch.setattr("montaj.dashboard_jobs.produce_batch", batch)
+    with pytest.raises(ValueError, match="not found|recorded permission"):
+        jobs.submit(Submission(resume=source))
+    batch.assert_not_called()
+    assert threads == [] and jobs.snapshot() is None

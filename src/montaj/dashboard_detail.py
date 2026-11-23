@@ -67,11 +67,16 @@ def _stage_action_html(cell: "StageCell", source_id: int, ctx: BoardContext) -> 
 
     state = cell.state.value
     stage = _runnable_stage(cell)
-    if not ctx.operations or stage is None or state not in _ACTION_LABELS:
+    if (
+        not ctx.operations
+        or stage is None
+        or state not in _ACTION_LABELS
+        or not cell.actionable
+    ):
         return ""
     label = _ACTION_LABELS[state]
     if ctx.running is not None:
-        return busy_html(label, ctx.running, f"why-{cell.key}")
+        return busy_html(label, ctx.running, f"why-{cell.key}", source_id)
     retry = state == "failed"
     if stage in PAID_STAGES:
         href = f"{_detail_path(source_id)}{_CONFIRM_SUFFIX}?stage={stage.value}"
@@ -87,7 +92,7 @@ def _stage_action_html(cell: "StageCell", source_id: int, ctx: BoardContext) -> 
 
 
 def _stage_note(cell: "StageCell") -> str:
-    """Up to date for a finished stage. The reason for a blocked or failed one.
+    """Up to date for a finished stage. The note of a pending, blocked or failed one.
 
     A permission reason is shown once as the page notice, not on every line.
     """
@@ -96,7 +101,7 @@ def _stage_note(cell: "StageCell") -> str:
         return '<span class="secondary">Up to date</span>'
     if (
         cell.reason
-        and state in {"blocked", "failed"}
+        and state in {"pending", "blocked", "failed"}
         and cell.reason not in PERMISSION_REASONS
     ):
         return f'<span class="secondary">{escape(cell.reason)}</span>'
@@ -108,7 +113,8 @@ def _stage_line_html(row: "BoardRow", cell: "StageCell", ctx: BoardContext) -> s
     state = cell.state.value
     permitted = not permission_reason(source.allowed, source.basis)
     action = _stage_action_html(cell, source.source_id, ctx)
-    if cell.key == "review" and permitted and source.clips[ClipStatus.CHECKED]:
+    reviewable = state != "blocked" and source.clips[ClipStatus.CHECKED]
+    if cell.key == "review" and permitted and reviewable:
         action = link_button(f"/?source={source.source_id}", "Open review")
     return (
         f'<li class="stage-line {state}"><div class="stage-info">'

@@ -26,7 +26,12 @@ from montaj.dashboard_jobs import (
     StageSubmission,
     Submission,
 )
-from montaj.dashboard_parts import BASE_PATH, STAGE_PATH, parse_source_id
+from montaj.dashboard_parts import (
+    BASE_PATH,
+    STAGE_PATH,
+    parse_source_id,
+    permission_reason,
+)
 from montaj.db import connect, fetch
 from montaj.ingest import source_dir
 from montaj.media import MediaError, source_lock
@@ -287,7 +292,7 @@ def _confirm_response(
     if source is None:
         return not_found_response()
     html_type = "text/html; charset=utf-8"
-    permitted = source.source_allowed and (source.allowed_basis or "").strip()
+    permitted = not permission_reason(source.source_allowed, source.allowed_basis)
     try:
         lines = jobs.estimate(source_id, stage, None) if permitted else []
     except (ValueError, MediaError, OSError, sqlite3.Error):

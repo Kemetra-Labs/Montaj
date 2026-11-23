@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from montaj.budget import Budget
 from montaj.candidates import CANDIDATE_LIMIT
 from montaj.config import Settings
-from montaj.dashboard_parts import LiveJob
+from montaj.dashboard_parts import LiveJob, permission_reason
 from montaj.db import connect, fetch
 from montaj.job import _JOB_ERRORS, DEFAULT_TARGET, produce_batch, start_job
 from montaj.models import Niche, Source
@@ -135,6 +135,8 @@ class JobQueue:
                     "location": dashboard_location(self.settings, submission.location)
                 }
             )
+        else:
+            self._require_permitted(submission.resume)
         budget = Budget.from_settings(self.settings, submission.budget)
         with self._lock:
             if self._activity is not None and self._activity.running:
@@ -276,7 +278,7 @@ class JobQueue:
             source = fetch(db, Source, source_id)
         if source is None:
             raise ValueError(f"Source {source_id} was not found.")
-        if not source.source_allowed or not (source.allowed_basis or "").strip():
+        if permission_reason(source.source_allowed, source.allowed_basis):
             raise ValueError(
                 "Only a source with recorded permission and its basis can run."
             )

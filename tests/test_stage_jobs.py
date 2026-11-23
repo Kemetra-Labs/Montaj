@@ -399,3 +399,41 @@ def test_draft_skips_clips_beyond_the_video_end_and_says_so(
         "Drafted and checked 1 clip: 1 passed, 0 warnings, 0 failed, "
         "skipped 1 beyond the video end."
     )
+
+
+@pytest.mark.parametrize(
+    ("status", "wording"),
+    [
+        ("language_mismatch", "transcript language differs"),
+        ("no_usable_speech", "insufficient usable speech"),
+        ("failed", "recorded a source failure"),
+    ],
+)
+def test_transcribe_reports_a_recorded_speech_failure_as_a_problem(
+    batch: Settings, monkeypatch: pytest.MonkeyPatch, status: str, wording: str
+) -> None:
+    def cached(settings: Settings, source_id: int, **kwargs: Any) -> None:
+        with connect(settings.db_path) as db:
+            db.execute(
+                "UPDATE sources SET speech_status = ?, failure_note = ? WHERE id = 1",
+                (status, "raw note https://signed.example/secret"),
+            )
+
+    monkeypatch.setattr(stage_jobs, "transcribe_source", cached)
+    result = _run(batch, BoardStage.TRANSCRIBE, [])
+    assert "Transcribed" not in result.summary
+    assert wording in result.problem and "secret" not in result.problem
+
+
+def test_budget_stop_mid_draft_reports_how_many_clips_finished(
+    batch: Settings, monkeypatch: pytest.MonkeyPatch, recorder: Recorder
+) -> None:
+    def draft(settings: Settings, source_id: int, **kwargs: Any) -> None:
+        if kwargs["clip_id"] == 3:
+            raise BudgetExceeded("Run budget reached.")
+        recorder.draft(settings, source_id, **kwargs)
+
+    monkeypatch.setattr(stage_jobs, "draft_source", draft)
+    result = _run(batch, BoardStage.DRAFT, [], top=5)
+    assert result.problem == "Run budget reached."
+    assert result.summary == "Stopped during draft after 2 clips."

@@ -386,3 +386,83 @@ def test_over_budget_stop_is_shown_on_detail(
     assert "per-run budget ceiling $0.500000" in page
     assert "&lt;b&gt;stop&lt;/b&gt;" in page and "<b>stop" not in page
     assert ">Review clips</a>" not in page
+
+
+def _clips(db_path: Path, statuses: list[ClipStatus]) -> None:
+    for clip_id, status in enumerate(statuses, start=1):
+        _add_clip(db_path, status, clip_id=clip_id)
+
+
+def test_partly_rendered_batch_after_a_restart_offers_run_not_rerun(
+    db_path: Path,
+) -> None:
+    _add_source(db_path)
+    _imported(db_path, "transcript.json", "candidates.json", "rank.json")
+    _clips(db_path, [ClipStatus.CAPTIONED] * 3 + [ClipStatus.RANKED] * 7)
+    settings = Settings(data_dir=db_path.parent)
+    restarted = JobQueue(settings)
+    page = handle_preview(settings, "/dashboard/sources/7", restarted)[2].decode()
+    render = _stage_lines(page)["Cut + captions"]
+    assert "Pending" in render and "3 of 10 done" in render
+    assert "Up to date" not in render and "Rerun" not in render
+    assert ">Run</button>" in render
+    home = handle_preview(settings, "/dashboard", restarted)[2].decode()
+    assert "Cut + captions: 3 of 10 done" in home and "Resume" in home
+
+
+def test_render_is_not_up_to_date_after_a_new_ranking(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path, "transcript.json", "candidates.json", "rank.json")
+    _clips(db_path, [ClipStatus.CAPTIONED, ClipStatus.CAPTIONED])
+    assert "Up to date" in _stage_lines(_detail_page(db_path))["Cut + captions"]
+    _add_clip(db_path, ClipStatus.RANKED, clip_id=3)
+    (db_path.parent / "sources/7/rank.json").write_text(
+        '{"input_hash":"new","clips":[{"clip_id":3,"score":9,"reason":"r","selected":true}]}',
+        encoding="utf-8",
+    )
+    render = _stage_lines(_detail_page(db_path))["Cut + captions"]
+    assert "Up to date" not in render and "Done" not in render
+
+
+def test_flagged_clips_show_fix_guidance_without_a_rerun(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path, "transcript.json", "candidates.json", "rank.json")
+    _clips(db_path, [ClipStatus.NEEDS_FIX, ClipStatus.CHECKED])
+    guidance = (
+        "Fix the flagged clips in the clip preview or with montaj review, "
+        "then rerun the check."
+    )
+    lines = _stage_lines(_detail_page(db_path))
+    draft = lines["Draft + check"]
+    assert "Failed" in draft and f"1 flagged clip. {guidance}" in draft
+    assert "<a" not in draft and "<button" not in draft
+    assert "Pending" in lines["Review"] and "Open review" in lines["Review"]
+    with connect(db_path) as db:
+        db.execute("UPDATE clips SET status = 'needs_fix' WHERE id = 2")
+    lines = _stage_lines(_detail_page(db_path))
+    assert f"2 flagged clips. {guidance}" in lines["Draft + check"]
+    assert "Blocked" in lines["Review"] and "Open review" not in lines["Review"]
+
+
+@pytest.mark.parametrize("status", ["language_mismatch", "no_usable_speech"])
+def test_speech_language_failure_has_no_retry_on_detail(
+    db_path: Path, status: str
+) -> None:
+    _add_source(db_path)
+    _imported(db_path, "transcript.json")
+    with connect(db_path) as db:
+        db.execute("UPDATE sources SET speech_status = ? WHERE id = 7", (status,))
+    transcribe = _stage_lines(_detail_page(db_path))["Transcribe"]
+    assert "Failed" in transcribe
+    for absent in ("Retry", "Rerun", "<a", "<button"):
+        assert absent not in transcribe
+
+
+def test_failed_ingest_detail_names_the_terminal_step(db_path: Path) -> None:
+    _add_source(db_path)
+    with connect(db_path) as db:
+        db.execute("UPDATE sources SET speech_status = 'failed' WHERE id = 7")
+    lines = _stage_lines(_detail_page(db_path))
+    assert "Failed" in lines["Ingest"]
+    assert "with montaj ingest, then refresh." in lines["Ingest"]
+    assert "Blocked" in lines["Transcribe"] and "Ingest first" in lines["Transcribe"]

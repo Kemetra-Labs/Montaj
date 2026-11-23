@@ -28,6 +28,7 @@ from montaj.dashboard_parts import (
     parse_source_id,
     permission_reason,
     render_dashboard_page,
+    source_problem,
 )
 from montaj.db import connect, fetch
 from montaj.housekeeping import disk_free
@@ -60,26 +61,13 @@ class SourceSnapshot:
     checkpoints: tuple[tuple[str, str], ...]
     clips: Counter[ClipStatus]
     cost: float
+    speech_status: str | None = None
 
 
 def _problem(source: Source) -> str | None:
     if not source.source_allowed:
         return "Record permission for this source before processing it."
-    if source.speech_status == "language_mismatch":
-        return "The transcript language differs from the requested language. Check the transcription settings."
-    if source.speech_status == "no_usable_speech":
-        return "The source has insufficient usable speech. Check the source audio."
-    if source.speech_status != "failed":
-        return None
-    # Historical notes may contain raw tool output or signed URLs. Render fixed guidance.
-    note = (source.failure_note or "").casefold()
-    if "javascript runtime" in note:
-        return "Install Deno or rebuild the Montaj image, then run montaj doctor."
-    if "ejs solver" in note:
-        return "Restore the matching EJS solver or rebuild the Montaj image, then run montaj doctor."
-    if "format" in note and "available" in note:
-        return "No usable media format was found. Check the source or obtain a permitted copy."
-    return "Montaj recorded a source failure. Check the locally reported error before retrying."
+    return source_problem(source.speech_status, source.failure_note)
 
 
 def _artifact(root: Path, name: str) -> Path | None:
@@ -149,6 +137,7 @@ def _snapshot(
         checkpoints,
         clips,
         cost,
+        source.speech_status,
     )
 
 
@@ -188,9 +177,16 @@ def _cell_html(cell: "StageCell") -> str:
     )
 
 
+def _note(cell: "StageCell") -> str:
+    """A cell reason for the home notes. A pending note names its stage."""
+    if cell.state.value == "pending":
+        return f"{cell.label}: {cell.reason}"
+    return cell.reason
+
+
 def _notes_html(cells: tuple["StageCell", ...]) -> str:
-    """Each distinct failure or blocked reason once, in strip order."""
-    reasons = dict.fromkeys(cell.reason for cell in cells if cell.reason)
+    """Each distinct failure, blocked or progress note once, in strip order."""
+    reasons = dict.fromkeys(_note(cell) for cell in cells if cell.reason)
     if not reasons:
         return ""
     items = "".join(f"<li>{escape(reason)}</li>" for reason in reasons)
@@ -199,7 +195,7 @@ def _notes_html(cells: tuple["StageCell", ...]) -> str:
 
 def _resume_html(source_id: int, label: str, ctx: BoardContext) -> str:
     if ctx.running is not None:
-        return busy_html(label, ctx.running)
+        return busy_html(label, ctx.running, source_id=source_id)
     return (
         f'<form class="row-action" action="{JOBS_LINK}" method="post">'
         f"{hidden(token=ctx.token, resume=source_id)}"
@@ -216,7 +212,7 @@ def _action_html(row: "BoardRow", ctx: BoardContext) -> str:
     target = {
         "review": f"/?source={source_id}",
         "export": f"/?source={source_id}&amp;ready=1",
-        "fix": f"{BASE_PATH}/sources/{source_id}",
+        "fix": f"/?source={source_id}",
     }[action.kind]
     return link_button(target, action.label)
 

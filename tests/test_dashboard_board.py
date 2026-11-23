@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 from threading import Event
 from unittest.mock import Mock
@@ -49,6 +50,7 @@ def _home(
 
 def test_home_rows_show_stage_strip_and_next_action(db_path: Path) -> None:
     _add_source(db_path)
+    _imported(db_path)
     page = _home(db_path)
     row = _rows(page)
     for label in ("Ingest", "Transcribe", "Candidates + rank", "Cut + captions"):
@@ -67,7 +69,7 @@ def test_home_rows_show_stage_strip_and_next_action(db_path: Path) -> None:
     [
         (ClipStatus.CHECKED, "Open review", 'href="/?source=7"'),
         (ClipStatus.APPROVED, "Export", 'href="/?source=7&amp;ready=1"'),
-        (ClipStatus.NEEDS_FIX, "Fix flagged clips", 'href="/dashboard/sources/7"'),
+        (ClipStatus.NEEDS_FIX, "Review flagged clips", 'href="/?source=7"'),
     ],
 )
 def test_home_review_export_and_fix_actions_are_links(
@@ -127,6 +129,8 @@ def test_run_buttons_are_disabled_while_a_job_runs(
     db_path: Path, running: tuple[int, str], message: str
 ) -> None:
     _add_source(db_path)
+    _imported(db_path)
+    shutil.copytree(db_path.parent / "sources/7", db_path.parent / "sources/2")
     with connect(db_path) as db:
         insert(
             db,
@@ -144,6 +148,9 @@ def test_run_buttons_are_disabled_while_a_job_runs(
     assert "<form" not in row
     assert message in row
     assert (running[0] == 0) == ("(source" not in row)
+    # The source whose job runs says so instead of naming itself as another job.
+    assert (running[0] == 2) == ("Running</span>" in row)
+    assert "(source 7)" not in row
 
 
 def test_home_escapes_titles_and_errors(db_path: Path) -> None:
@@ -177,6 +184,7 @@ def test_handle_preview_passes_live_job_state_to_the_board(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _add_source(db_path)
+    _imported(db_path)
     settings = Settings(data_dir=db_path.parent)
     jobs = JobQueue(settings)
     threads = _capture_threads(monkeypatch)
@@ -209,7 +217,8 @@ def test_handle_preview_passes_live_job_state_to_the_board(
         assert jobs.run_spend() == (0.25, settings.max_cost_per_run_usd)
         live = handle_preview(settings, "/dashboard", jobs)[2].decode()
         assert 'http-equiv="refresh"' in live and "<dt>Run spend</dt>" in live
-        assert "Another job is running (source 7)" in live
+        assert "Running</span>" in _rows(live)
+        assert "Another job is running" not in _rows(live)
     finally:
         finish.set()
         threads[0].join(timeout=5)
