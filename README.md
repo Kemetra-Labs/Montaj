@@ -79,6 +79,15 @@ uv run montaj run 1 --until check
 
 `run` executes the automated stages in order, skips anything already current, stops at the first failure, and resumes there on the next run. It never reviews, exports, or posts.
 
+For one-step English production, submit a permitted source and a campaign:
+
+```bash
+uv run montaj job data/inbox/interview.mp4 --campaign 1 --niche business --allowed --basis "creator written permission" --top 10
+uv run montaj job --resume 1 --top 10
+```
+
+A job uses the campaign's duration bounds, ranks candidates once, and tries alternates when a clip fails its checks. It stops when the batch reaches its target, the budget is exhausted, or there are no more eligible clips. The summary reports any shortfall and links to the source preview. The existing source and clip checkpoints let you resume after an interruption.
+
 ## 🚀 Quick start
 
 ### Requirements
@@ -214,7 +223,11 @@ uv run montaj preview serve       # http://127.0.0.1:8765/ (loopback only)
 uv run montaj preview export 1    # copy renders into one folder with an index page
 ```
 
-`uv run montaj dashboard` opens the read-only operations view on the same loopback server. Use it to find sources needing attention, inspect saved checkpoints, see clip statuses and estimated API costs, or open a source's clips in the preview. Refresh to read the latest saved state. Keep running stages and recording review decisions in the CLI.
+`uv run montaj dashboard` starts the local operations dashboard. Open **Production jobs** to submit a YouTube HTTPS URL or a filename under `data/inbox`, monitor progress and spend, or resume an existing source. The dashboard runs one production job at a time. If the dashboard process stops, restart it and resume by source ID to reuse saved stages.
+
+The dashboard worker uses the host's media tools and environment. If your credentials are in a local `.env` file, launch it with `uv run --env-file .env montaj dashboard`. The Docker pilot can run the job from the CLI with `docker compose run --rm montaj job ...`.
+
+Open a source's clip preview from the dashboard to see the video, timestamps, transcript, hooks, caption, and check findings. Approve or reject clips there, then use **Export approved clips** to package that source for a matching posting account. Publishing is manual. The standalone `preview serve` command provides a read-only view.
 
 On a remote server, tunnel in: `ssh -L 8765:127.0.0.1:8765 user@server`.
 
@@ -236,6 +249,7 @@ Copies approved clips into a folder for manual upload. A clip is exported only w
 
 ```bash
 uv run montaj export --account 1
+uv run montaj export --account 1 --source 1
 ```
 
 Each clip ships as an `mp4` plus a text file (hook, caption, hashtags), with a `manifest.csv` for the day.

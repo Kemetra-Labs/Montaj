@@ -1,15 +1,24 @@
+from collections.abc import Callable
+from email.message import Message
+from io import BytesIO
 from pathlib import Path
+from threading import Thread
+from unittest.mock import Mock
+from urllib.parse import urlencode
 
 import pytest
 from typer.testing import CliRunner
 
+from montaj.budget import Budget
 from montaj.cli import app
 from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
+from montaj.dashboard_jobs import JOBS_PATH, JobQueue, Submission, dashboard_location
 from montaj.db import connect, insert
 from montaj.ingest import SourceMetadata
+from montaj.job import JobResult
 from montaj.models import CheckResult, Clip, ClipStatus, Niche, Source
-from montaj.preview import handle_preview
+from montaj.preview import _handler, handle_preview
 
 
 def test_overview_uses_saved_sources_and_filters_attention(db_path: Path) -> None:
@@ -121,11 +130,121 @@ def test_dashboard_empty_and_missing_database(db_path: Path, tmp_path: Path) -> 
 def test_dashboard_command_uses_shared_localhost_server(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    seen: list[int] = []
+    seen: list[tuple[int, bool]] = []
     monkeypatch.setattr(
-        "montaj.preview.serve_preview", lambda settings, port: seen.append(port)
+        "montaj.preview.serve_preview",
+        lambda settings, port, *, operations: seen.append((port, operations)),
     )
     result = CliRunner().invoke(app, ["dashboard", "--port", "8766"])
     assert result.exit_code == 0, result.output
-    assert seen == [8766]
+    assert seen == [(8766, True)]
     assert "http://127.0.0.1:8766/dashboard" in result.output
+
+
+def test_dashboard_jobs_only_accept_youtube_or_an_inbox_file(db_path: Path) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    inbox = settings.data_dir / "inbox"
+    inbox.mkdir()
+    video = inbox / "video.mp4"
+    video.touch()
+    outside = settings.data_dir / "other.mp4"
+    outside.touch()
+    assert dashboard_location(settings, "video.mp4") == str(video.resolve())
+    assert (
+        dashboard_location(settings, "https://youtu.be/video_id001")
+        == "https://youtu.be/video_id001"
+    )
+    for location in (
+        "../other.mp4",
+        "https://localhost/video",
+        "https://youtube.com:444/v",
+        "https://youtube.com/redirect?q=https://example.com",
+        r"\\server\share\video.mp4",
+        r"C:video.mp4",
+    ):
+        with pytest.raises(ValueError):
+            dashboard_location(settings, location)
+
+
+def test_dashboard_job_worker_exposes_its_batch_result(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    threads: list[Thread] = []
+
+    def worker(
+        *, target: Callable[..., None], args: tuple[object, ...], daemon: bool
+    ) -> Thread:
+        thread = Thread(target=target, args=args, daemon=daemon)
+        threads.append(thread)
+        return thread
+
+    def fake_batch(
+        settings: Settings,
+        source: int,
+        *,
+        top: int,
+        budget: Budget,
+        progress: Callable[[str], None],
+    ) -> JobResult:
+        assert source == 7 and top == 2
+        progress("Checking clips")
+        return JobResult(source, top, ready=[3, 4])
+
+    monkeypatch.setattr("montaj.dashboard_jobs.Thread", worker)
+    monkeypatch.setattr("montaj.dashboard_jobs.produce_batch", fake_batch)
+    jobs.submit(Submission(resume=7, top=2))
+    threads[0].join(timeout=5)
+    assert not threads[0].is_alive()
+    page = jobs.page()
+    assert b"2/2 clips ready" in page and b"/?source=7&amp;ready=1" in page
+
+
+@pytest.mark.parametrize(
+    ("operations", "origin", "valid_token", "status"),
+    [
+        (False, "http://127.0.0.1:8765", True, 405),
+        (True, "https://other.example", True, 403),
+        (True, "http://127.0.0.1:8765/path", True, 403),
+        (True, "http://127.0.0.1:8765", False, 403),
+        (True, "http://127.0.0.1:8765", True, 303),
+    ],
+)
+def test_job_post_requires_the_operations_server_and_same_origin_token(
+    db_path: Path,
+    operations: bool,
+    origin: str,
+    valid_token: bool,
+    status: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    submit = Mock()
+    monkeypatch.setattr(jobs, "submit", submit)
+    handler = _handler(settings, jobs if operations else None)
+    request = object.__new__(handler)
+    request.headers = Message()
+    request.headers["Host"] = "127.0.0.1:8765"
+    request.headers["Origin"] = origin
+    request.headers["Content-Type"] = "application/x-www-form-urlencoded"
+    body = urlencode(
+        {"token": jobs.token if valid_token else "wrong", "resume": 1}
+    ).encode()
+    request.headers["Content-Length"] = str(len(body))
+    request.path = JOBS_PATH
+    request.rfile = BytesIO(body)
+    request.connection = Mock()
+    request.send_error = Mock()
+    request.send_response = Mock()
+    request.send_header = Mock()
+    request.end_headers = Mock()
+    request.do_POST()
+    if status == 303:
+        request.send_response.assert_called_once_with(303)
+        submit.assert_called_once()
+        assert submit.call_args.args[0].resume == 1
+    else:
+        request.send_error.assert_called_once_with(status)
+        submit.assert_not_called()

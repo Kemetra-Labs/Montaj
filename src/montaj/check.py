@@ -131,16 +131,8 @@ def check_clip(
                     "No matching account to apply the daily post cap.",
                 )
             )
-        elif posts_today >= rules.max_posts_per_day:
-            findings.append(
-                RuleFinding(
-                    CheckResult.FAIL,
-                    (
-                        f"Daily post cap is {rules.max_posts_per_day}; "
-                        f"{posts_today} posts are already logged today."
-                    ),
-                )
-            )
+        elif cap_failure := daily_cap_failure(rules, posts_today):
+            findings.append(cap_failure)
     if rules.flag_medical_claims or niche == Niche.HEALTH:
         flagged = banned_term(
             published,
@@ -164,7 +156,16 @@ def check_clip(
     )
 
 
-def _posts_today(db: sqlite3.Connection, account_id: int) -> int:
+def daily_cap_failure(rules: CampaignRules, count: int) -> RuleFinding | None:
+    if rules.max_posts_per_day is None or count < rules.max_posts_per_day:
+        return None
+    return RuleFinding(
+        CheckResult.FAIL,
+        f"Daily post cap is {rules.max_posts_per_day}; {count} posts are already logged today.",
+    )
+
+
+def posts_today(db: sqlite3.Connection, account_id: int) -> int:
     today = datetime.now(UTC).date().isoformat()
     row = db.execute(
         """SELECT COUNT(*) FROM posts
@@ -240,7 +241,7 @@ def check_source(
         )
         account = _account_for_cap(db, source, account_id)
         posted_today = (
-            _posts_today(db, account.id) if account is not None and account.id else None
+            posts_today(db, account.id) if account is not None and account.id else None
         )
     if source.campaign_id is not None and campaign is None:
         raise ValueError(f"Campaign {source.campaign_id} does not exist.")

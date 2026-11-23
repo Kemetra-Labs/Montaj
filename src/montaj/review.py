@@ -12,7 +12,7 @@ from montaj.config import Settings
 from montaj.cut import cut_source, selected_clips
 from montaj.db import connect, fetch, save_clip
 from montaj.ingest import load_source
-from montaj.media import MediaError
+from montaj.media import MediaError, source_lock
 from montaj.models import (
     Account,
     Campaign,
@@ -23,7 +23,7 @@ from montaj.models import (
     ClipStatus,
     utc_now,
 )
-from montaj.pipeline import ClipInputs, input_hash, stage_input_hash
+from montaj.pipeline import ClipInputs, input_hash, is_stale, stage_input_hash
 from montaj.rank import clip_words
 from montaj.transcribe import Transcript
 
@@ -227,6 +227,73 @@ def _assign_account(
     return _recheck(settings, source_id, _save(settings, clip))
 
 
+def approval_problem(clip: Clip, inputs: ClipInputs) -> str | None:
+    if clip.check_result is None:
+        return "it has not been checked."
+    if clip.check_result == CheckResult.FAIL:
+        return "the compliance check failed."
+    if (
+        clip.check_result == CheckResult.WARN
+        and clip.decision_reason != "confirmed warning"
+    ):
+        return "the warning was not confirmed."
+    if is_stale(clip, ClipStage.CHECK, inputs):
+        return "the compliance check is not current."
+    if clip.changed_since_review or is_stale(clip, ClipStage.REVIEW, inputs):
+        return "approval is not current."
+    return None
+
+
+def _checked_for_approval(settings: Settings, source_id: int, clip: Clip) -> Clip:
+    if not clip.check_input_hash:
+        return clip
+    if is_stale(clip, ClipStage.CHECK, _inputs(settings, source_id)):
+        raise ValueError("The campaign check is out of date. Run the check again.")
+    checked = _recheck(settings, source_id, clip)
+    if (checked.check_result, checked.decision_reason) != (
+        clip.check_result,
+        clip.decision_reason,
+    ):
+        raise ValueError(
+            "The campaign check changed. Refresh the batch before approving."
+        )
+    return checked
+
+
+def _apply_review_key(
+    settings: Settings,
+    source_id: int,
+    clip: Clip,
+    command: str,
+    reader: Reader,
+    writer: Writer,
+) -> int:
+    if command == "a":
+        return int(
+            _approve(
+                settings,
+                source_id,
+                _checked_for_approval(settings, source_id, clip),
+                reader,
+                writer,
+            )
+        )
+    if command == "r":
+        return int(_reject(settings, source_id, clip, reader, writer))
+    if command in {"1", "2"}:
+        _pick_hook(settings, source_id, clip, "a" if command == "1" else "b")
+    elif command == "c":
+        _edit_caption(settings, source_id, clip, _line(reader, "Caption"))
+    elif command == "t":
+        start_text, end_text = _line(reader, "Start and end change in seconds").split()
+        _trim(settings, source_id, clip, float(start_text), float(end_text))
+    elif command == "u":
+        _assign_account(settings, source_id, clip, int(_line(reader, "Account id")))
+    else:
+        writer(f"Unknown key: {command or 'blank'}")
+    return 0
+
+
 def review_source(
     settings: Settings,
     source_id: int,
@@ -236,7 +303,7 @@ def review_source(
     writer: Writer = print,
 ) -> int:
     """Review checked clips. Returns how many were approved or rejected."""
-    load_source(settings, source_id)
+    _, _, directory = load_source(settings, source_id)
     skipped: set[int] = set()
     decisions = 0
     while True:
@@ -255,29 +322,62 @@ def review_source(
             if clip.id is not None:
                 skipped.add(clip.id)
             continue
-        if command == "a":
-            decisions += _approve(settings, source_id, clip, reader, writer)
-            continue
-        if command == "r":
-            decisions += _reject(settings, source_id, clip, reader, writer)
-            continue
         try:
-            if command in {"1", "2"}:
-                _pick_hook(settings, source_id, clip, "a" if command == "1" else "b")
-            elif command == "c":
-                _edit_caption(settings, source_id, clip, _line(reader, "Caption"))
-            elif command == "t":
-                raw = _line(reader, "Start and end change in seconds")
-                start_text, end_text = raw.split()
-                _trim(settings, source_id, clip, float(start_text), float(end_text))
-            elif command == "u":
-                _assign_account(
-                    settings, source_id, clip, int(_line(reader, "Account id"))
+            with source_lock(directory, command="review"):
+                if clip not in _waiting(settings, source_id, skipped):
+                    writer("The clip changed. Review the current version.")
+                    continue
+                decisions += _apply_review_key(
+                    settings, source_id, clip, command, reader, writer
                 )
-            else:
-                writer(f"Unknown key: {command or 'blank'}")
         except (MediaError, OSError, sqlite3.Error, ValueError) as exc:
             writer(f"Review edit failed: {exc}")
+
+
+def review_decision(
+    settings: Settings,
+    source_id: int,
+    clip_id: int,
+    *,
+    action: str,
+    version: str,
+    confirm_warning: bool = False,
+    reason: str = "",
+) -> str:
+    """Apply a decision to the checked clip shown in the browser."""
+    _, _, directory = load_source(settings, source_id)
+    with source_lock(directory, command="review"):
+        clip = next(
+            (
+                clip
+                for clip in _waiting(settings, source_id, set())
+                if clip.id == clip_id
+            ),
+            None,
+        )
+        if clip is None or not version or clip.check_input_hash != version:
+            raise ValueError("The clip changed. Refresh the batch before reviewing.")
+        current = stage_input_hash(clip, ClipStage.CHECK, _inputs(settings, source_id))
+        if version != current:
+            raise ValueError(
+                "The campaign check is out of date. Resume the production job."
+            )
+        messages: list[str] = []
+        if action == "approve":
+            _approve(
+                settings,
+                source_id,
+                _checked_for_approval(settings, source_id, clip),
+                lambda _: "y" if confirm_warning else "",
+                messages.append,
+            )
+        elif action == "reject":
+            _reject(
+                settings, source_id, clip, lambda _: reason.strip(), messages.append
+            )
+        else:
+            raise ValueError("Choose approve or reject.")
+        return messages[-1]
 
 
 def review(

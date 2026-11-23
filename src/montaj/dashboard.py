@@ -171,7 +171,7 @@ def _load(settings: Settings, source_id: int | None) -> list[SourceSnapshot]:
     ]
 
 
-def _page(title: str, content: str, active: str = "") -> bytes:
+def render_dashboard_page(title: str, content: str, active: str = "") -> bytes:
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(title)} · Montaj</title><link rel="stylesheet" href="/dashboard/style.css"></head>
@@ -185,7 +185,9 @@ def _badge(text: str, tone: str) -> str:
     return f'<span class="badge {tone}">{escape(text)}</span>'
 
 
-def _overview(settings: Settings, sources: list[SourceSnapshot], view: str) -> bytes:
+def _overview(
+    settings: Settings, sources: list[SourceSnapshot], view: str, operations: bool
+) -> bytes:
     attention = [source for source in sources if source.tone == "warning"]
     review = [
         source
@@ -225,9 +227,14 @@ def _overview(settings: Settings, sources: list[SourceSnapshot], view: str) -> b
         results = '<div class="empty"><h2>No sources match this view</h2><a href="/dashboard">Show all sources</a></div>'
     else:
         results = '<div class="empty"><h2>No sources yet</h2><p>Import a permitted video with <code>montaj ingest</code>.</p></div>'
-    return _page(
+    jobs = (
+        '<a class="button primary" href="/dashboard/jobs">Production jobs</a>'
+        if operations
+        else ""
+    )
+    return render_dashboard_page(
         "Operations",
-        f"""<div class="heading"><h1>Production board</h1><a class="button" href="/dashboard?view={view}">Refresh</a></div>
+        f"""<div class="heading"><h1>Production board</h1><div class="toolbar">{jobs}<a class="button" href="/dashboard?view={view}">Refresh</a></div></div>
 <div class="board">
 <section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Source queue</h2>
 <nav class="filters" aria-label="Filter sources">{filters}</nav></div>{results}</section>
@@ -282,7 +289,7 @@ def _detail(source: SourceSnapshot) -> bytes:
         if clips
         else '<p class="empty-copy">No clips recorded yet.</p>'
     )
-    return _page(
+    return render_dashboard_page(
         source.title,
         f"""<a class="back" href="/dashboard">← Source queue</a>
 <div class="heading"><div><div class="eyebrow">Source #{source.source_id} · {source.niche}</div><h1>{escape(source.title)}</h1></div>
@@ -298,7 +305,7 @@ def _detail(source: SourceSnapshot) -> bytes:
 
 
 def dashboard_response(
-    settings: Settings, path: str, view: str
+    settings: Settings, path: str, view: str, *, operations: bool = False
 ) -> tuple[int, str, bytes]:
     html = "text/html; charset=utf-8"
     if path == f"{BASE_PATH}/style.css":
@@ -320,7 +327,7 @@ def dashboard_response(
             return (
                 404,
                 html,
-                _page(
+                render_dashboard_page(
                     "Source not found",
                     '<h1>Source not found</h1><a href="/dashboard">All sources</a>',
                 ),
@@ -331,18 +338,18 @@ def dashboard_response(
         return (
             503,
             html,
-            _page(
+            render_dashboard_page(
                 "Dashboard unavailable",
                 "<h1>Dashboard unavailable</h1><p>Check the data directory and run <code>montaj db init</code> to initialize or migrate the database.</p>",
             ),
         )
     if source_id is None:
-        return 200, html, _overview(settings, sources, view)
+        return 200, html, _overview(settings, sources, view, operations)
     if not sources:
         return (
             404,
             html,
-            _page(
+            render_dashboard_page(
                 "Source not found",
                 '<h1>Source not found</h1><a href="/dashboard">All sources</a>',
             ),

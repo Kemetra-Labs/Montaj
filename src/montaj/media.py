@@ -10,18 +10,51 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from threading import get_ident
 
 
 class MediaError(RuntimeError):
     """A local media tool could not complete its task."""
 
 
+@dataclass(slots=True)
+class _FileHashMemo:
+    path: Path
+    stamp: tuple[int, int, int, int] | None = None
+    digest: str = ""
+
+
+_file_hash_memo: ContextVar[_FileHashMemo | None] = ContextVar(
+    "file_hash_memo", default=None
+)
+
+
+@contextmanager
+def reuse_file_hash(path: Path) -> Iterator[None]:
+    """Share the source video's digest across stages in one locked batch."""
+    token = _file_hash_memo.set(_FileHashMemo(path))
+    try:
+        yield
+    finally:
+        _file_hash_memo.reset(token)
+
+
 def file_hash(path: Path) -> str:
+    memo = _file_hash_memo.get()
     with path.open("rb") as media:
-        return hashlib.file_digest(media, "sha256").hexdigest()
+        if memo is None or path != memo.path:
+            return hashlib.file_digest(media, "sha256").hexdigest()
+        stat = os.fstat(media.fileno())
+        stamp = (stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        if stamp != memo.stamp:
+            memo.digest = hashlib.file_digest(media, "sha256").hexdigest()
+            memo.stamp = stamp
+        return memo.digest
 
 
 def atomic_text(path: Path, content: str) -> None:
@@ -36,8 +69,8 @@ def atomic_text(path: Path, content: str) -> None:
             temporary.unlink(missing_ok=True)
 
 
-# Depth for the current process. montaj run holds the lock and then calls stages.
-_held_depth: dict[str, int] = {}
+# Stage calls may nest within one job. Concurrent threads must acquire the OS lock.
+_held_depth: dict[tuple[int, str], int] = {}
 
 
 @contextmanager
@@ -47,7 +80,7 @@ def source_lock(
     """Lock data/sources/<id>/.lock. The OS drops it when this process exits."""
     directory.mkdir(parents=True, exist_ok=True)
     lock_path = directory / ".lock"
-    key = str(lock_path.resolve())
+    key = (get_ident(), str(lock_path.resolve()))
     if _held_depth.get(key, 0) > 0:
         _held_depth[key] += 1
         try:

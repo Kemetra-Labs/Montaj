@@ -13,22 +13,24 @@ from typing import Annotated
 import typer
 
 from montaj.captions import source_inputs
+from montaj.check import daily_cap_failure, posts_today
 from montaj.config import Settings
 from montaj.db import connect, fetch, save_clip
 from montaj.ingest import source_dir
+from montaj.media import MediaError, source_lock
 from montaj.models import (
     Account,
     Campaign,
     CampaignRules,
-    CheckResult,
     Clip,
     ClipStage,
     ClipStatus,
     Source,
     utc_now,
 )
-from montaj.pipeline import ClipInputs, input_hash, is_stale, stage_input_hash
+from montaj.pipeline import ClipInputs, input_hash, stage_input_hash
 from montaj.preview import PreviewError, resolve_inside
+from montaj.review import approval_problem
 
 Writer = Callable[[str], None]
 _UNSAFE = re.compile(r"[^A-Za-z0-9]+")
@@ -89,29 +91,8 @@ def _render(settings: Settings, clip: Clip) -> Path:
     return path
 
 
-def _compliance_reason(clip: Clip, inputs: ClipInputs) -> str | None:
-    if clip.check_result is None:
-        return "it has not been checked."
-    if clip.check_result == CheckResult.FAIL:
-        return "the compliance check failed."
-    confirmed = clip.decision_reason == "confirmed warning"
-    if clip.check_result == CheckResult.WARN and not confirmed:
-        return "the warning was not confirmed."
-    if clip.check_result != CheckResult.PASS and not confirmed:
-        return "it has not been checked."
-    if is_stale(clip, ClipStage.CHECK, inputs):
-        return "the compliance check is not current."
-    if (
-        clip.reviewed_at is None
-        or clip.changed_since_review
-        or is_stale(clip, ClipStage.REVIEW, inputs)
-    ):
-        return "approval is not current."
-    return None
-
-
 def _package_for(
-    settings: Settings, clip: Clip, source: Source | None
+    settings: Settings, clip: Clip, source: Source | None, account_id: int
 ) -> _Package | str:
     if source is None or source.id is None:
         return "the source is missing."
@@ -122,12 +103,19 @@ def _package_for(
     try:
         inputs = export_inputs(settings, source)
         with connect(settings.db_path) as db:
-            _rules, campaign = _rules_and_name(db, source)
+            rules, campaign = _rules_and_name(db, source)
+            cap = (
+                daily_cap_failure(rules, posts_today(db, account_id))
+                if rules.max_posts_per_day is not None
+                else None
+            )
     except (OSError, ValueError):
         return "inputs are not available."
-    reason = _compliance_reason(clip, inputs)
+    reason = approval_problem(clip, inputs)
     if reason is not None:
         return reason
+    if cap is not None:
+        return cap.reason
     hook = " ".join((clip.hook_text or "").split())
     caption = " ".join((clip.caption or "").split())
     if not hook or not caption:
@@ -205,6 +193,7 @@ def export_account(
     settings: Settings,
     account_id: int,
     *,
+    source_id: int | None = None,
     today: date | None = None,
     now: datetime | None = None,
     writer: Writer = print,
@@ -215,8 +204,9 @@ def export_account(
     with connect(settings.db_path) as db:
         account = fetch(db, Account, account_id)
         rows = db.execute(
-            "SELECT id FROM clips WHERE status = ? ORDER BY id",
-            (ClipStatus.APPROVED.value,),
+            """SELECT id, source_id FROM clips WHERE status = ?
+               AND (? IS NULL OR source_id = ?) ORDER BY id""",
+            (ClipStatus.APPROVED.value, source_id, source_id),
         ).fetchall()
     if account is None or account.id is None:
         raise ValueError(f"Account {account_id} does not exist.")
@@ -231,26 +221,33 @@ def export_account(
         / stamp
         / f"{account.id}-{_token(account.handle, 'account')}"
     )
+    if source_id is not None:
+        folder /= f"source-{source_id}"
     exported = 0
     refused = 0
     written: Path | None = None
-    for (clip_id,) in rows:
-        with connect(settings.db_path) as db:
-            clip = fetch(db, Clip, int(clip_id))
-            source = fetch(db, Source, clip.source_id) if clip is not None else None
-        if clip is None or clip.id is None or clip.account_id not in (None, account.id):
-            continue
-        package = _package_for(settings, clip, source)
-        if isinstance(package, str):
-            writer(f"Clip {clip.id}: {package}")
-            refused += 1
-            continue
-        _write_package(
-            folder, clip, package, account.platform.value, moment.isoformat()
-        )
-        _mark_exported(settings, clip, account.id, package.inputs)
-        exported += 1
-        written = folder
+    for clip_id, owner_id in rows:
+        with source_lock(source_dir(settings, owner_id), command="export"):
+            with connect(settings.db_path) as db:
+                clip = fetch(db, Clip, clip_id)
+                source = fetch(db, Source, owner_id)
+            if (
+                clip is None
+                or clip.status != ClipStatus.APPROVED
+                or clip.account_id not in (None, account.id)
+            ):
+                continue
+            package = _package_for(settings, clip, source, account.id)
+            if isinstance(package, str):
+                writer(f"Clip {clip.id}: {package}")
+                refused += 1
+                continue
+            _write_package(
+                folder, clip, package, account.platform.value, moment.isoformat()
+            )
+            _mark_exported(settings, clip, account.id, package.inputs)
+            exported += 1
+            written = folder
     if exported == 0 and refused == 0:
         writer("No approved clips are waiting for this account.")
     return exported, refused, written
@@ -258,13 +255,14 @@ def export_account(
 
 def export_clips(
     account: Annotated[int, typer.Option("--account", min=1)],
+    source: Annotated[int | None, typer.Option("--source", min=1)] = None,
 ) -> None:
     """Copy approved clips into a dated folder for manual upload."""
     try:
         exported, refused, folder = export_account(
-            Settings.from_env(), account, writer=typer.echo
+            Settings.from_env(), account, source_id=source, writer=typer.echo
         )
-    except (OSError, sqlite3.Error, ValueError) as exc:
+    except (MediaError, OSError, sqlite3.Error, ValueError) as exc:
         typer.echo(f"Export failed: {exc}", err=True)
         raise typer.Exit(1) from exc
     if exported and folder is not None:
