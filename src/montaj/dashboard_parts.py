@@ -99,6 +99,7 @@ class BoardContext:
     campaign: str = ""
     source_ceiling: float = 0.0
     campaign_choices: tuple[tuple[int, str], ...] = ()
+    run_ceiling: float = 0.0
 
 
 def hidden(**fields: str | int) -> str:

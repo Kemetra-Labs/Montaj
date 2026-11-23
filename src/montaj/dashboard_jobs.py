@@ -39,6 +39,7 @@ class Submission(BaseModel):
     resume: int | None = Field(default=None, gt=0)
     top: int = Field(default=DEFAULT_TARGET, ge=1, le=CANDIDATE_LIMIT)
     budget: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    confirm: bool = False
 
 
 class StageSubmission(BaseModel):
@@ -56,6 +57,23 @@ _ESTIMATE_UNTIL = {
     BoardStage.RANK: "rank",
     BoardStage.DRAFT: "draft",
 }
+# Estimate lines shown for every stage, then the lines each stage owns.
+_SHARED_LINES = ("Source ", "Run ceiling:")
+_STAGE_LINES = {
+    BoardStage.TRANSCRIBE: ("transcribe:", "Full transcription pass"),
+    BoardStage.RANK: ("candidates:", "rank:"),
+    BoardStage.DRAFT: ("draft:",),
+}
+# Stages without an offline price, named as the cost note reads.
+_UNPRICED = {BoardStage.RANK: "candidates and rank", BoardStage.DRAFT: "draft"}
+_CONFIRM_FIRST = "Confirm the estimated cost first."
+
+
+def _caps_line(stages: str, budget: Budget) -> str:
+    return (
+        f"No offline estimate for {stages}; spend stops at the run ceiling "
+        f"${budget.per_run:.2f} and the source ceiling ${budget.per_source:.2f}."
+    )
 
 
 def dashboard_location(settings: Settings, supplied: str) -> str:
@@ -125,6 +143,8 @@ class JobQueue:
             return replace(self._activity) if self._activity is not None else None
 
     def submit(self, submission: Submission) -> None:
+        if not submission.confirm:
+            raise ValueError(_CONFIRM_FIRST)
         if submission.resume is None:
             if not submission.allowed or not submission.basis.strip():
                 raise ValueError("Confirm permission and record its basis.")
@@ -199,17 +219,23 @@ class JobQueue:
     def estimate(
         self, source_id: int, stage: BoardStage, budget: float | None
     ) -> list[str]:
-        """Cost lines for a paid stage. A free stage has nothing to estimate."""
+        """Cost lines for one paid stage only. A free stage has nothing to estimate."""
         until = _ESTIMATE_UNTIL.get(stage)
         if until is None:
             return []
-        return estimate_run(
-            self.settings,
-            source_id,
-            until,
-            "en",
-            Budget.from_settings(self.settings, budget),
-        )
+        caps = Budget.from_settings(self.settings, budget)
+        lines = estimate_run(self.settings, source_id, until, "en", caps)
+        owned = _SHARED_LINES + _STAGE_LINES[stage]
+        kept = [line for line in lines if line.startswith(owned)]
+        if stage in _UNPRICED:
+            kept.append(_caps_line(_UNPRICED[stage], caps))
+        return kept
+
+    def estimate_batch(self, source_id: int) -> list[str]:
+        """Cost lines for a Resume, which runs every stage through draft."""
+        caps = Budget.from_settings(self.settings, None)
+        lines = estimate_run(self.settings, source_id, "draft", "en", caps)
+        return [*lines, _caps_line("candidates, rank and draft", caps)]
 
     def running(self) -> tuple[int, str] | None:
         """The source and strip key of the running job. Source 0 means an import."""
@@ -253,7 +279,7 @@ class JobQueue:
             if self._activity is not None and self._activity.running:
                 raise ValueError("A production job is already running.")
             if submission.stage in PAID_STAGES and not submission.confirm:
-                raise ValueError("Confirm the estimated cost first.")
+                raise ValueError(_CONFIRM_FIRST)
             activity = Activity(
                 "Starting",
                 source_id=submission.source,

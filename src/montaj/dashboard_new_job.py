@@ -19,6 +19,15 @@ def _limits_fields() -> str:
     )
 
 
+def _spend_confirm(ctx: BoardContext) -> str:
+    """No estimate exists before import, so the operator accepts the ceilings."""
+    return (
+        '<label class="inline-field"><input type="checkbox" name="confirm" value="yes" required> '
+        "I understand this run spends API credits, up to the run ceiling of "
+        f"${ctx.run_ceiling:.2f} and the source ceiling of ${ctx.source_ceiling:.2f}</label>"
+    )
+
+
 def _campaign_options(choices: tuple[tuple[int, str], ...]) -> str:
     return "".join(
         f'<option value="{campaign_id}">{escape(name)}</option>'
@@ -42,6 +51,7 @@ def _form_html(ctx: BoardContext) -> str:
 <label>Permission basis <input name="basis" maxlength="200" required></label>
 <label class="inline-field"><input type="checkbox" name="allowed" value="true" required> I have permission to use this video</label>
 {_limits_fields()}
+{_spend_confirm(ctx)}
 <button class="button primary">Start job</button></form>"""
 
 

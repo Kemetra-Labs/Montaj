@@ -56,12 +56,12 @@ def test_home_rows_show_stage_strip_and_next_action(db_path: Path) -> None:
     for label in ("Ingest", "Transcribe", "Candidates + rank", "Cut + captions"):
         assert label in row
     assert "Pending" in row and "Blocked" in row
-    assert row.count("<button") == 1 and row.count("<form") == 1
-    assert 'action="/dashboard/jobs"' in row and 'method="post"' in row
-    assert 'name="token" value="board-token"' in row
-    assert 'name="resume" value="7"' in row and ">Resume</button>" in row
-    assert "<form" not in _rows(_home(db_path, operations=False))
-    assert "<button" not in _rows(_home(db_path, operations=False))
+    # Resume spends API money, so it opens the cost confirmation first.
+    assert "<button" not in row and "<form" not in row
+    assert 'href="/dashboard/sources/7/confirm?stage=batch">Resume</a>' in row
+    read_only = _rows(_home(db_path, operations=False))
+    assert "<form" not in read_only and "<button" not in read_only
+    assert "/confirm" not in read_only
 
 
 @pytest.mark.parametrize(
@@ -197,7 +197,7 @@ def test_handle_preview_passes_live_job_state_to_the_board(
 
     monkeypatch.setattr("montaj.dashboard_jobs.run_board_stage", blocked_stage)
     idle = handle_preview(settings, "/dashboard?notice=Saved+it", jobs)[2].decode()
-    assert f'name="token" value="{jobs.token}"' in idle and "Saved it" in idle
+    assert "confirm?stage=batch" in idle and "Saved it" in idle
     assert 'http-equiv="refresh"' not in idle and jobs.run_spend() is None
     jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
     try:
@@ -257,6 +257,11 @@ def test_board_has_new_job_form_with_permission_fields(db_path: Path) -> None:
     assert "I have permission to use this video" in form
     assert 'name="top" type="number" min="1" max="' in form and 'value="10"' in form
     assert 'name="budget" type="number" min="0" step="0.01"' in form
+    assert (
+        '<input type="checkbox" name="confirm" value="yes" required> I understand '
+        "this run spends API credits, up to the run ceiling of $0.50 and the "
+        "source ceiling of $2.00"
+    ) in form
     assert "Resume a source" not in page
 
 
@@ -347,6 +352,7 @@ def test_new_job_error_rerenders_board_with_notice(db_path: Path) -> None:
         "niche": "health",
         "basis": "Creator approval",
         "allowed": "true",
+        "confirm": "yes",
     }
     request = _post_request(settings, jobs, fields, path=JOBS_PATH)
     request.send_response.assert_called_once_with(400)
@@ -409,7 +415,7 @@ def test_restarted_dashboard_shows_checkpoints_and_resume(db_path: Path) -> None
     row = _rows(page)
     for label in ("Transcribe", "Candidates + rank"):
         assert f'<li class="cell done"><span class="cell-name">{label}</span>' in row
-    assert 'name="resume" value="7"' in row and ">Resume</button>" in row
+    assert 'href="/dashboard/sources/7/confirm?stage=batch">Resume</a>' in row
     assert "<button disabled" not in row and "Live job" not in page
     detail = handle_preview(settings, "/dashboard/sources/7", restarted)[2].decode()
     assert detail.count(">Saved<") == 3
@@ -459,3 +465,42 @@ def test_jobs_path_on_a_read_only_server_serves_the_board_without_forms(
     )
     assert status == 200 and content_type.startswith("text/html")
     assert b"Production board" in body and b"<form" not in body
+
+
+def test_new_job_without_confirm_is_refused_and_starts_nothing(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_campaign(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    threads = _capture_threads(monkeypatch)
+    (settings.data_dir / "inbox").mkdir()
+    (settings.data_dir / "inbox/video.mp4").touch()
+    fields = {
+        "location": "video.mp4",
+        "campaign": 3,
+        "niche": "health",
+        "basis": "Creator approval",
+        "allowed": "true",
+    }
+    request = _post_request(settings, jobs, fields, path=JOBS_PATH)
+    request.send_response.assert_called_once_with(400)
+    page = request.wfile.getvalue().decode()
+    assert "Confirm the estimated cost first." in page
+    assert threads == [] and jobs.snapshot() is None
+
+
+def test_job_post_passes_the_confirmation_through(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    submit = Mock()
+    monkeypatch.setattr(jobs, "submit", submit)
+    _post_request(
+        settings, jobs, {"resume": 7, "top": 10, "confirm": "yes"}, path=JOBS_PATH
+    )
+    submission = submit.call_args.args[0]
+    assert (submission.resume, submission.top, submission.confirm) == (7, 10, True)
+    _post_request(settings, jobs, {"resume": 7, "confirm": "no"}, path=JOBS_PATH)
+    assert submit.call_args.args[0].confirm is False

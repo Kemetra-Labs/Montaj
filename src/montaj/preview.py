@@ -16,6 +16,7 @@ from montaj.config import Settings
 from montaj.dashboard import dashboard_response, not_found_response
 from montaj.dashboard_detail import (
     confirm_source_id,
+    render_batch_confirm,
     render_confirm,
     render_confirm_unavailable,
 )
@@ -34,6 +35,7 @@ from montaj.dashboard_parts import (
 )
 from montaj.db import connect, fetch
 from montaj.ingest import source_dir
+from montaj.job import _JOB_ERRORS
 from montaj.media import MediaError, source_lock
 from montaj.models import CheckResult, Clip, ClipStatus, Source
 from montaj.rank import clip_words
@@ -274,18 +276,30 @@ def _export_form(settings: Settings, source_id: int, token: str) -> str:
     )
 
 
+_BATCH = "batch"
+
+
+def _paid_stage(value: str) -> BoardStage | None:
+    try:
+        stage = BoardStage(value)
+    except ValueError:
+        return None
+    return stage if stage in PAID_STAGES else None
+
+
 def _confirm_response(
     settings: Settings,
     jobs: JobQueue | None,
     source_id: int,
     query: dict[str, list[str]],
 ) -> tuple[int, str, bytes]:
-    """The cost confirmation for one paid stage. Free stages and read-only servers get 404."""
-    try:
-        stage = BoardStage(query.get("stage", [""])[0])
-    except ValueError:
-        return not_found_response()
-    if jobs is None or stage not in PAID_STAGES:
+    """The cost confirmation for a paid stage or a Resume (`stage=batch`).
+
+    Free stages, unknown stages and read-only servers get 404.
+    """
+    value = query.get("stage", [""])[0]
+    stage = None if value == _BATCH else _paid_stage(value)
+    if jobs is None or (stage is None and value != _BATCH):
         return not_found_response()
     with connect(settings.db_path, read_only=True) as db:
         source = fetch(db, Source, source_id)
@@ -294,14 +308,24 @@ def _confirm_response(
     html_type = "text/html; charset=utf-8"
     permitted = not permission_reason(source.source_allowed, source.allowed_basis)
     try:
-        lines = jobs.estimate(source_id, stage, None) if permitted else []
-    except (ValueError, MediaError, OSError, sqlite3.Error):
+        lines = _estimate_lines(jobs, source_id, stage) if permitted else []
+    except (*_JOB_ERRORS, EOFError):
         lines = []
     if not lines:
         return 200, html_type, render_confirm_unavailable(source_id)
+    if stage is None:
+        return 200, html_type, render_batch_confirm(source_id, lines, jobs.token)
     retry = query.get("retry") == ["yes"]
     page = render_confirm(source_id, stage, lines, jobs.token, retry=retry)
     return 200, html_type, page
+
+
+def _estimate_lines(
+    jobs: JobQueue, source_id: int, stage: BoardStage | None
+) -> list[str]:
+    if stage is None:
+        return jobs.estimate_batch(source_id)
+    return jobs.estimate(source_id, stage, None)
 
 
 def _board_response(
@@ -415,15 +439,25 @@ def _stage_submission(source: int, form: dict[str, str]) -> StageSubmission:
         raise ValueError("Check the clip target and budget, then try again.") from None
 
 
+def _job_submission(form: dict[str, str]) -> Submission:
+    fields = {
+        key: value
+        for key, value in form.items()
+        if value and key not in {"token", "confirm"}
+    }
+    try:
+        return Submission.model_validate(
+            {**fields, "confirm": form.get("confirm") == "yes"}
+        )
+    except ValidationError:
+        raise ValueError("Check the job fields, then try again.") from None
+
+
 def _post_action(
     settings: Settings, jobs: JobQueue, path: str, form: dict[str, str]
 ) -> str:
     if path == JOBS_PATH:
-        jobs.submit(
-            Submission.model_validate(
-                {key: value for key, value in form.items() if value}
-            )
-        )
+        jobs.submit(_job_submission(form))
         return BASE_PATH
     source = parse_source_id(form.get("source", ""))
     if source is None:

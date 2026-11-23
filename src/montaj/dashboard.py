@@ -16,14 +16,12 @@ from montaj.dashboard_detail import live_panel_html, render_detail
 from montaj.dashboard_new_job import new_job_html
 from montaj.dashboard_parts import (
     BASE_PATH,
-    JOBS_LINK,
     NEW_JOB_LINK,
     STATE_LABELS,
     BoardContext,
     LiveJob,
     badge,
     busy_html,
-    hidden,
     link_button,
     parse_source_id,
     permission_reason,
@@ -194,13 +192,10 @@ def _notes_html(cells: tuple["StageCell", ...]) -> str:
 
 
 def _resume_html(source_id: int, label: str, ctx: BoardContext) -> str:
+    """Resume or Retry spends API money, so it opens the cost confirmation."""
     if ctx.running is not None:
         return busy_html(label, ctx.running, source_id=source_id)
-    return (
-        f'<form class="row-action" action="{JOBS_LINK}" method="post">'
-        f"{hidden(token=ctx.token, resume=source_id)}"
-        f'<button class="button primary">{escape(label)}</button></form>'
-    )
+    return link_button(f"{BASE_PATH}/sources/{source_id}/confirm?stage=batch", label)
 
 
 def _action_html(row: "BoardRow", ctx: BoardContext) -> str:
@@ -407,7 +402,7 @@ def dashboard_response(
                 "<h1>Dashboard unavailable</h1><p>Check the data directory and run <code>montaj db init</code> to initialize or migrate the database.</p>",
             ),
         )
-    ceiling = Budget.from_settings(settings, None).per_source
+    ceilings = Budget.from_settings(settings, None)
     context = BoardContext(
         operations,
         running,
@@ -416,8 +411,9 @@ def dashboard_response(
         run_spend,
         live,
         campaign,
-        ceiling,
+        ceilings.per_source,
         choices,
+        ceilings.per_run,
     )
     if source_id is None:
         return 200, html, _overview(settings, board, view, context)

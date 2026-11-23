@@ -58,11 +58,11 @@ def test_dashboard_job_progress_is_per_server_and_resume_uses_source_id(
 
     monkeypatch.setattr("montaj.dashboard_jobs.Thread", worker)
     monkeypatch.setattr("montaj.dashboard_jobs.produce_batch", fake_batch)
-    jobs.submit(Submission(resume=7, top=2))
+    jobs.submit(Submission(resume=7, top=2, confirm=True))
     try:
         assert started.wait(timeout=5)
         with pytest.raises(ValueError, match="already running"):
-            jobs.submit(Submission(resume=7, top=2))
+            jobs.submit(Submission(resume=7, top=2, confirm=True))
         activity = jobs.snapshot()
         assert activity is not None and activity.stage == "Checking clips"
         restarted = JobQueue(settings)
@@ -73,7 +73,7 @@ def test_dashboard_job_progress_is_per_server_and_resume_uses_source_id(
     assert not threads[0].is_alive()
     page = handle_preview(settings, "/dashboard", jobs)[2]
     assert b"2/2 clips ready" in page and b"/?source=7&amp;ready=1" in page
-    restarted.submit(Submission(resume=7, top=2))
+    restarted.submit(Submission(resume=7, top=2, confirm=True))
     threads[1].join(timeout=5)
     assert not threads[1].is_alive()
     assert b"2/2 clips ready" in handle_preview(settings, "/dashboard", restarted)[2]
@@ -113,7 +113,7 @@ def test_stage_submit_runs_one_stage_and_blocks_a_second_job(
         with pytest.raises(ValueError, match="already running"):
             jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
         with pytest.raises(ValueError, match="already running"):
-            jobs.submit(Submission(resume=7))
+            jobs.submit(Submission(resume=7, confirm=True))
         activity = jobs.snapshot()
         assert activity is not None and activity.stage == "Rendering clip 4"
         assert jobs.running() == (7, "render")
@@ -238,13 +238,87 @@ def test_estimate_prices_the_paid_stage(
         settings: Settings, source: int, until: str, language: str, budget: Budget
     ) -> list[str]:
         seen.append((source, until, language, budget.per_run))
-        return ["line"]
+        return list(_ESTIMATE_LINES)
 
     monkeypatch.setattr("montaj.dashboard_jobs.estimate_run", fake_estimate)
-    assert jobs.estimate(7, stage, 1.5) == ["line"]
+    assert jobs.estimate(7, stage, 1.5) == _STAGE_LINES[stage]
     assert seen == [(7, until, "en", 1.5)]
     assert jobs.estimate(7, BoardStage.RENDER, None) == []
     assert len(seen) == 1
+
+
+_ESTIMATE_LINES = [
+    "Source 7 prior estimated API spend: $0.000000",
+    "Run ceiling: $1.500000 | Source ceiling: $1.500000",
+    "transcribe: $0.120000 for one full audio pass (diarization off)",
+    "Full transcription pass fits the current budget.",
+    "candidates: remaining cost depends on inputs and cache reuse",
+    "rank: remaining cost depends on inputs and cache reuse",
+    "draft: remaining cost depends on inputs and cache reuse",
+]
+_CAPS = "spend stops at the run ceiling $1.50 and the source ceiling $1.50."
+_STAGE_LINES = {
+    BoardStage.TRANSCRIBE: _ESTIMATE_LINES[:4],
+    BoardStage.RANK: [
+        *_ESTIMATE_LINES[:2],
+        *_ESTIMATE_LINES[4:6],
+        f"No offline estimate for candidates and rank; {_CAPS}",
+    ],
+    BoardStage.DRAFT: [
+        *_ESTIMATE_LINES[:2],
+        _ESTIMATE_LINES[6],
+        f"No offline estimate for draft; {_CAPS}",
+    ],
+}
+
+
+def test_batch_estimate_covers_every_paid_stage_and_states_the_caps(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    seen: list[tuple[str, float]] = []
+
+    def fake_estimate(
+        settings: Settings, source: int, until: str, language: str, budget: Budget
+    ) -> list[str]:
+        seen.append((until, budget.per_run))
+        return list(_ESTIMATE_LINES)
+
+    monkeypatch.setattr("montaj.dashboard_jobs.estimate_run", fake_estimate)
+    lines = jobs.estimate_batch(7)
+    assert seen == [("draft", settings.max_cost_per_run_usd)]
+    assert lines[:-1] == _ESTIMATE_LINES
+    run, source = settings.max_cost_per_run_usd, settings.max_cost_per_source_usd
+    assert lines[-1] == (
+        "No offline estimate for candidates, rank and draft; spend stops at the "
+        f"run ceiling ${run:.2f} and the source ceiling ${source:.2f}."
+    )
+
+
+@pytest.mark.parametrize("resume", [7, None])
+def test_submit_without_confirm_starts_nothing(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, resume: int | None
+) -> None:
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    batch, start = Mock(), Mock()
+    monkeypatch.setattr("montaj.dashboard_jobs.produce_batch", batch)
+    monkeypatch.setattr("montaj.dashboard_jobs.start_job", start)
+    submission = Submission(
+        resume=resume,
+        location="https://youtu.be/video_id001",
+        campaign=1,
+        niche=Niche.HEALTH,
+        basis="Creator approval",
+        allowed=True,
+    )
+    with pytest.raises(ValueError, match="Confirm the estimated cost first."):
+        jobs.submit(submission)
+    batch.assert_not_called()
+    start.assert_not_called()
+    assert threads == [] and jobs.snapshot() is None
 
 
 def test_running_reports_a_new_source_import_as_source_zero(
@@ -274,6 +348,7 @@ def test_running_reports_a_new_source_import_as_source_zero(
             niche=Niche.HEALTH,
             basis="Creator approval",
             allowed=True,
+            confirm=True,
         )
     )
     try:
@@ -346,6 +421,6 @@ def test_resume_of_an_unpermitted_or_unknown_source_is_refused_up_front(
     batch = Mock()
     monkeypatch.setattr("montaj.dashboard_jobs.produce_batch", batch)
     with pytest.raises(ValueError, match="not found|recorded permission"):
-        jobs.submit(Submission(resume=source))
+        jobs.submit(Submission(resume=source, confirm=True))
     batch.assert_not_called()
     assert threads == [] and jobs.snapshot() is None

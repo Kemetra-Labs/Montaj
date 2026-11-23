@@ -205,14 +205,21 @@ def test_confirm_page_shows_estimate_lines_and_confirm_form(
         settings: Settings, source: int, until: str, language: str, budget: Budget
     ) -> list[str]:
         seen.append((source, until, budget.per_run))
-        return ["Transcription: $0.10", "Total <b>$0.10</b>"]
+        return [
+            "Source 7 prior estimated API spend: <b>$0.10</b>",
+            "transcribe: $0.120000 for one full audio pass",
+            "rank: remaining cost depends on inputs and cache reuse",
+        ]
 
     monkeypatch.setattr("montaj.dashboard_jobs.estimate_run", fake_estimate)
     status, body = _confirm(settings, jobs, 7, "stage=rank")
     page = body.decode()
     assert status == 200 and seen == [(7, "rank", settings.max_cost_per_run_usd)]
-    assert "Transcription: $0.10" in page and "Total &lt;b&gt;$0.10&lt;/b&gt;" in page
+    assert "prior estimated API spend: &lt;b&gt;$0.10&lt;/b&gt;" in page
     assert "<b>" not in page
+    # Only the lines for this stage, and the ceilings that stop its spend.
+    assert "rank: remaining cost" in page and "transcribe:" not in page
+    assert "No offline estimate for candidates and rank; spend stops at" in page
     assert 'action="/dashboard/stage" method="post"' in page
     for field in (
         f'name="token" value="{jobs.token}"',
@@ -466,3 +473,51 @@ def test_failed_ingest_detail_names_the_terminal_step(db_path: Path) -> None:
     assert "Failed" in lines["Ingest"]
     assert "with montaj ingest, then refresh." in lines["Ingest"]
     assert "Blocked" in lines["Transcribe"] and "Ingest first" in lines["Transcribe"]
+
+
+def test_batch_confirm_page_posts_a_confirmed_resume(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    seen: list[str] = []
+
+    def fake_estimate(
+        settings: Settings, source: int, until: str, language: str, budget: Budget
+    ) -> list[str]:
+        seen.append(until)
+        return ["transcribe: $0.120000 for one full audio pass <i>x</i>"]
+
+    monkeypatch.setattr("montaj.dashboard_jobs.estimate_run", fake_estimate)
+    status, body = _confirm(settings, jobs, 7, "stage=batch")
+    page = body.decode()
+    assert status == 200 and seen == ["draft"]
+    assert "transcribe: $0.120000" in page and "&lt;i&gt;x&lt;/i&gt;" in page
+    assert "No offline estimate for candidates, rank and draft" in page
+    assert 'action="/dashboard/jobs" method="post"' in page
+    for field in (
+        f'name="token" value="{jobs.token}"',
+        'name="resume" value="7"',
+        'name="top" value="10"',
+        'name="confirm" value="yes"',
+    ):
+        assert field in page
+    assert 'name="stage"' not in page and page.count("<button") == 1
+    assert 'href="/dashboard/sources/7">Cancel' in page
+    assert _confirm(settings, None, 7, "stage=batch")[0] == 404
+
+
+def test_batch_confirm_hides_a_failed_estimate(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+
+    def failing(*_: object, **__: object) -> list[str]:
+        raise ValueError("raw /secret/path")
+
+    monkeypatch.setattr("montaj.dashboard_jobs.estimate_run", failing)
+    status, body = _confirm(settings, JobQueue(settings), 7, "stage=batch")
+    assert status == 200 and b"Estimate unavailable" in body
+    assert b"<form" not in body and b"raw" not in body

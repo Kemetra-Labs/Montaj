@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from montaj.dashboard_parts import (
     BASE_PATH,
+    JOBS_LINK,
     PERMISSION_REASONS,
     STAGE_PATH,
     STATE_LABELS,
@@ -18,6 +19,7 @@ from montaj.dashboard_parts import (
     permission_reason,
     render_dashboard_page,
 )
+from montaj.job import DEFAULT_TARGET
 from montaj.models import ClipStatus
 
 if TYPE_CHECKING:
@@ -239,6 +241,23 @@ def render_detail(row: "BoardRow", ctx: BoardContext) -> bytes:
     )
 
 
+def _confirm_page(
+    source_id: int, heading: str, lines: list[str], action: str, fields: str
+) -> bytes:
+    """Estimate lines and the one click that accepts their cost."""
+    items = "".join(f"<li>{escape(line)}</li>" for line in lines)
+    return render_dashboard_page(
+        "Confirm cost",
+        f"""<a class="back" href="{_detail_path(source_id)}">← Source #{source_id}</a>
+<div class="heading"><h1>Confirm cost</h1></div>
+<section class="panel job-panel"><h2>{escape(heading)} for source #{source_id}</h2>
+<ul class="estimate">{items}</ul>
+<form class="job-form" action="{action}" method="post">{fields}
+<button class="button primary">Confirm and run</button></form>
+<a class="button" href="{_detail_path(source_id)}">Cancel</a></section>""",
+    )
+
+
 def render_confirm(
     source_id: int,
     stage: "BoardStage",
@@ -247,21 +266,18 @@ def render_confirm(
     *,
     retry: bool = False,
 ) -> bytes:
-    """The estimate for a paid stage and the one click that accepts its cost."""
-    items = "".join(f"<li>{escape(line)}</li>" for line in lines)
+    """The estimate for one paid stage, posted as a confirmed stage job."""
     fields = hidden(token=token, source=source_id, stage=stage.value, confirm="yes")
     if retry:
         fields += hidden(retry="yes")
-    return render_dashboard_page(
-        "Confirm cost",
-        f"""<a class="back" href="{_detail_path(source_id)}">← Source #{source_id}</a>
-<div class="heading"><h1>Confirm cost</h1></div>
-<section class="panel job-panel"><h2>{escape(stage.value.capitalize())} for source #{source_id}</h2>
-<ul class="estimate">{items}</ul>
-<form class="job-form" action="{STAGE_PATH}" method="post">{fields}
-<button class="button primary">Confirm and run</button></form>
-<a class="button" href="{_detail_path(source_id)}">Cancel</a></section>""",
-    )
+    heading = stage.value.capitalize()
+    return _confirm_page(source_id, heading, lines, STAGE_PATH, fields)
+
+
+def render_batch_confirm(source_id: int, lines: list[str], token: str) -> bytes:
+    """The estimate for a Resume, posted as a confirmed batch for the default target."""
+    fields = hidden(token=token, resume=source_id, top=DEFAULT_TARGET, confirm="yes")
+    return _confirm_page(source_id, "Resume", lines, JOBS_LINK, fields)
 
 
 def render_confirm_unavailable(source_id: int) -> bytes:
