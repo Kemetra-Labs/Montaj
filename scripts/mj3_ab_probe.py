@@ -427,9 +427,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     result = args.run(args)
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = workspace_path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     text = json.dumps(result, indent=2, ensure_ascii=False)
-    (args.out_dir / f"{args.command}.json").write_text(text, encoding="utf-8")
+    (out_dir / f"{args.command}.json").write_text(text, encoding="utf-8")
     print(text)
 
 
