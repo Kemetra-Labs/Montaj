@@ -100,7 +100,10 @@ def batch(prepared_source: Settings) -> Settings:
                 rules_json=rules.model_dump_json(),
             ),
         )
-        db.execute("UPDATE sources SET campaign_id = 1 WHERE id = 1")
+        db.execute(
+            "UPDATE sources SET campaign_id = 1, allowed_basis = ? WHERE id = 1",
+            ("Own channel footage",),
+        )
         for clip_id in range(1, 6):
             insert(
                 db,
@@ -338,3 +341,61 @@ def test_rank_json_with_missing_clip_row_is_an_error(
     with pytest.raises(ValueError, match="Ranked clip 99 is missing"):
         _run(batch, BoardStage.RENDER, [])
     assert recorder.calls == []
+
+
+def test_stage_requires_a_recorded_permission_basis(
+    batch: Settings, recorder: Recorder
+) -> None:
+    with connect(batch.db_path) as db:
+        db.execute("UPDATE sources SET allowed_basis = '  ' WHERE id = 1")
+    with pytest.raises(ValueError, match="Record a permission basis"):
+        _run(batch, BoardStage.TRANSCRIBE, [])
+    assert recorder.calls == []
+
+
+def test_stage_runs_when_a_permission_basis_is_recorded(
+    batch: Settings, recorder: Recorder
+) -> None:
+    _run(batch, BoardStage.TRANSCRIBE, [])
+    assert recorder.calls == [("transcribe", None)]
+
+
+def _end_clip_past_video(settings: Settings, clip_id: int) -> None:
+    with connect(settings.db_path) as db:
+        db.execute("UPDATE clips SET end_s = 30 WHERE id = ?", (clip_id,))
+
+
+def test_render_skips_clips_beyond_the_video_end_and_says_so(
+    batch: Settings, recorder: Recorder
+) -> None:
+    _end_clip_past_video(batch, 2)
+    result = _run(batch, BoardStage.RENDER, [], top=3)
+    assert [call for call in recorder.calls if call[0] == "cut"] == [
+        ("cut", 1),
+        ("cut", 3),
+    ]
+    assert result.summary == (
+        "Rendered and captioned 2 clips, skipped 1 beyond the video end."
+    )
+    assert result.problem == ""
+
+
+def test_render_with_only_out_of_range_clips_reports_the_skips(
+    batch: Settings, recorder: Recorder
+) -> None:
+    _end_clip_past_video(batch, 1)
+    result = _run(batch, BoardStage.RENDER, [], top=1)
+    assert recorder.calls == []
+    assert result.summary == "No clips to render, skipped 1 beyond the video end."
+
+
+def test_draft_skips_clips_beyond_the_video_end_and_says_so(
+    batch: Settings, recorder: Recorder
+) -> None:
+    _end_clip_past_video(batch, 1)
+    result = _run(batch, BoardStage.DRAFT, [], top=2)
+    assert [call for call in recorder.calls if call[0] == "draft"] == [("draft", 2)]
+    assert result.summary == (
+        "Drafted and checked 1 clip: 1 passed, 0 warnings, 0 failed, "
+        "skipped 1 beyond the video end."
+    )

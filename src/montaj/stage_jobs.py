@@ -45,6 +45,7 @@ class _Run:
     settings: Settings
     source_id: int
     directory: Path
+    duration: float
     campaign_id: int | None
     top: int
     budget: Budget
@@ -55,12 +56,19 @@ class _Run:
     renderer: Renderer | None
 
 
+_END_TOLERANCE_S = 0.05
+
+
 def _plural(count: int, noun: str) -> str:
     return f"{count} {noun}{'' if count == 1 else 's'}"
 
 
-def _selected_clips(run: _Run) -> list[Clip]:
-    """Clips this run may touch, taken from the saved ranking, never a fresh one."""
+def _selected_clips(run: _Run) -> tuple[list[Clip], int]:
+    """Clips this run may touch, taken from the saved ranking, never a fresh one.
+
+    Also returns how many were skipped for ending past the video, which the
+    renderer would refuse.
+    """
     if not (run.directory / "rank.json").is_file():
         raise ValueError("Run rank first.")
     ids = load_rank(run.directory).selected_ids
@@ -75,8 +83,18 @@ def _selected_clips(run: _Run) -> list[Clip]:
             clips.append(clip)
     # A retry touches only failed clips. Otherwise human decisions are left alone.
     if run.retry_failed:
-        return [c for c in clips if c.status == ClipStatus.NEEDS_FIX]
-    return [c for c in clips if not has_review_decision(c)]
+        chosen = [c for c in clips if c.status == ClipStatus.NEEDS_FIX]
+    else:
+        chosen = [c for c in clips if not has_review_decision(c)]
+    usable = [c for c in chosen if c.end_s <= run.duration + _END_TOLERANCE_S]
+    return usable, len(chosen) - len(usable)
+
+
+def _finish(done: str, skipped: int) -> str:
+    """End a summary sentence, naming any clips skipped beyond the video end."""
+    if not skipped:
+        return f"{done}."
+    return f"{done}, skipped {skipped} beyond the video end."
 
 
 def _transcribe(run: _Run) -> StageResult:
@@ -116,7 +134,7 @@ def _rank(run: _Run) -> StageResult:
 
 
 def _render(run: _Run) -> StageResult:
-    clips = _selected_clips(run)
+    clips, skipped = _selected_clips(run)
     for clip in clips:
         clip_id = clip.id
         assert clip_id is not None
@@ -125,12 +143,13 @@ def _render(run: _Run) -> StageResult:
         run.progress(f"Captioning clip {clip_id}")
         caption_source(run.settings, run.source_id, clip_id)
     if not clips:
-        return StageResult("No clips to render.")
-    return StageResult(f"Rendered and captioned {_plural(len(clips), 'clip')}.")
+        return StageResult(_finish("No clips to render", skipped))
+    done = f"Rendered and captioned {_plural(len(clips), 'clip')}"
+    return StageResult(_finish(done, skipped))
 
 
 def _draft(run: _Run) -> StageResult:
-    clips = _selected_clips(run)
+    clips, skipped = _selected_clips(run)
     tally: dict[CheckResult, list[int]] = {result: [] for result in CheckResult}
     for clip in clips:
         clip_id = clip.id
@@ -147,18 +166,19 @@ def _draft(run: _Run) -> StageResult:
         [(_, outcome)] = check_source(run.settings, run.source_id, clip_id=clip_id)
         tally[outcome.result].append(clip_id)
     if not clips:
-        return StageResult("No clips to draft.")
+        return StageResult(_finish("No clips to draft", skipped))
     passed, warned, failed = (
         tally[CheckResult.PASS],
         tally[CheckResult.WARN],
         tally[CheckResult.FAIL],
     )
     ids = ", ".join(str(clip_id) for clip_id in failed)
-    return StageResult(
+    done = (
         f"Drafted and checked {_plural(len(clips), 'clip')}: "
         f"{len(passed)} passed, {_plural(len(warned), 'warning')}, "
-        f"{len(failed)} failed" + (f" (clip {ids})." if failed else ".")
+        f"{len(failed)} failed" + (f" (clip {ids})" if failed else "")
     )
+    return StageResult(_finish(done, skipped))
 
 
 _STAGES: dict[BoardStage, Callable[[_Run], StageResult]] = {
@@ -189,11 +209,16 @@ def run_board_stage(
     """
     if not 1 <= top <= CANDIDATE_LIMIT:
         raise ValueError(f"Choose a clip target between 1 and {CANDIDATE_LIMIT}.")
-    source, _, directory = load_source(settings, source_id)
+    source, metadata, directory = load_source(settings, source_id)
+    if not (source.allowed_basis or "").strip():
+        raise ValueError(
+            "Record a permission basis on the source before running a stage."
+        )
     run = _Run(
         settings,
         source_id,
         directory,
+        metadata.duration,
         source.campaign_id,
         top,
         budget,
