@@ -19,8 +19,11 @@ def test_ass_highlights_each_word_at_clip_relative_time() -> None:
     output = render_ass(words, clip, load_caption_style())
     events = [line for line in output.splitlines() if line.startswith("Dialogue:")]
     assert len(events) == 9
-    assert events[0].startswith("Dialogue: 0,0:00:00.00,0:00:00.40,")
-    assert events[1].startswith("Dialogue: 0,0:00:00.50,0:00:00.90,")
+    # Short gaps between words are bridged so the caption never blinks off.
+    assert events[0].startswith("Dialogue: 0,0:00:00.00,0:00:00.50,")
+    assert events[1].startswith("Dialogue: 0,0:00:00.50,0:00:01.00,")
+    # The last word of the clip lingers briefly after it is spoken.
+    assert events[-1].startswith("Dialogue: 0,0:00:04.00,0:00:04.70,")
     assert r"{\c&H52DCFF&}word0" in events[0]
     assert events[0].count(r"\N") == 1
     assert r"\N" not in events[-1]

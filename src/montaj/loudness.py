@@ -13,7 +13,21 @@ from montaj.media import MediaError
 TRUE_PEAK_CEILING = -2.0
 LOUDNESS_RANGE = 11.0
 MIN_GAIN_DB = 0.1
+# Above this decoded true peak the encoded clip risks clipping on a phone.
+VERIFY_TRUE_PEAK_DBTP = -1.0
 _JSON_BLOCK = re.compile(r"\{[^{}]*\}")
+
+
+@dataclass(frozen=True, slots=True)
+class LoudnessPolicy:
+    """Safe constant-gain policy: never attenuate, never clip, never over-boost."""
+
+    target_lufs: float
+    ceiling_dbtp: float = TRUE_PEAK_CEILING
+    max_gain_db: float = 12.0
+
+    def tag(self) -> str:
+        return f"{self.target_lufs:g}lufs/{self.ceiling_dbtp:g}dbtp/+{self.max_gain_db:g}db"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,15 +58,33 @@ def linear_gain_db(
     true_peak: float,
     target: float,
     ceiling: float = TRUE_PEAK_CEILING,
+    max_gain: float = math.inf,
 ) -> float:
     """Constant gain toward the target that keeps the true peak under the ceiling.
 
-    Never attenuates, skips adjustments below MIN_GAIN_DB and leaves silence alone.
+    Never attenuates, never exceeds max_gain, skips adjustments below MIN_GAIN_DB
+    and leaves silence alone.
     """
     if not (math.isfinite(integrated) and math.isfinite(true_peak)):
         return 0.0
-    gain = min(target - integrated, ceiling - true_peak)
+    gain = min(target - integrated, ceiling - true_peak, max_gain)
     return round(gain, 2) if gain >= MIN_GAIN_DB else 0.0
+
+
+def policy_gain_db(heard: Loudness, policy: LoudnessPolicy) -> float:
+    return linear_gain_db(
+        heard.integrated,
+        heard.true_peak,
+        policy.target_lufs,
+        policy.ceiling_dbtp,
+        policy.max_gain_db,
+    )
+
+
+def backoff_gain_db(gain: float, measured_peak: float, ceiling: float) -> float:
+    """Reduce a gain by the amount an encoded clip's true peak exceeded the ceiling."""
+    reduced = gain - (measured_peak - ceiling)
+    return round(reduced, 2) if reduced >= MIN_GAIN_DB else 0.0
 
 
 def measure_loudness(

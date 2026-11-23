@@ -10,13 +10,22 @@ from typing import Annotated
 import typer
 from pydantic import BaseModel, Field
 
+from montaj.caption_layout import TimedWord, caption_events
 from montaj.config import Settings
 from montaj.cut import CUT_STYLE, cut_style, render_inputs, selected_clips
 from montaj.db import connect, save_clip
+from montaj.engine import recipe_lookup, record_recipe, source_niche
 from montaj.ingest import load_source
 from montaj.media import MediaError, atomic_text, file_hash, run_tool, source_lock
 from montaj.models import Clip, ClipStage, ClipStatus
-from montaj.pipeline import ClipInputs, input_hash, is_stale, stage_input_hash
+from montaj.pipeline import (
+    ClipInputs,
+    LegacyRecipe,
+    effective_options,
+    input_hash,
+    is_stale,
+    stage_input_hash,
+)
 from montaj.rank import clip_words
 from montaj.transcribe import Transcript, Word
 
@@ -34,6 +43,19 @@ class CaptionStyle(BaseModel):
     highlight: str = Field(pattern=r"^[0-9a-fA-F]{6}$")
     margin_bottom: int = Field(ge=384, le=1450)
     words_per_line: int = Field(ge=3, le=5)
+    max_gap: float = Field(default=0.5, ge=0, le=1.5)
+
+
+# The style captions used before the unified engine. Reviewed clips stay pinned to it.
+LEGACY_CAPTION_STYLE = {
+    "font_family": "Noto Sans Arabic",
+    "size": 66,
+    "outline": 4.0,
+    "highlight": "FFDC52",
+    "margin_bottom": 450,
+    "words_per_line": 4,
+}
+CAPTION_ENGINE = "ass-word-highlight-v2"
 
 
 def load_caption_style() -> CaptionStyle:
@@ -56,13 +78,16 @@ def source_inputs(
         directory / "transcript.json",
         settings.resolved_font_path,
         style,
-        cut_style(settings),
+        cut_style(settings, source_niche(settings, directory)),
+        settings.data_dir,
     )
     return ClipInputs(
         source_hash=base.source_hash,
         transcript_hash=base.transcript_hash,
         rules_hash=rules_hash,
         stage_options={**base.stage_options, **(extra or {})},
+        legacy=base.legacy,
+        recorded=base.recorded,
     )
 
 
@@ -72,6 +97,7 @@ def caption_inputs(
     font: Path,
     style: CaptionStyle,
     cut: str = CUT_STYLE,
+    data_dir: Path | None = None,
 ) -> ClipInputs:
     if not font.is_file():
         raise ValueError(
@@ -82,10 +108,19 @@ def caption_inputs(
         file_hash(transcript_path),
         {
             ClipStage.CAPTIONS: input_hash(
-                style.model_dump(), file_hash(font), "ass-word-highlight-v1"
+                style.model_dump(), file_hash(font), CAPTION_ENGINE
             ),
         },
         style=cut,
+        legacy=(
+            LegacyRecipe(
+                CUT_STYLE,
+                input_hash(
+                    LEGACY_CAPTION_STYLE, file_hash(font), "ass-word-highlight-v1"
+                ),
+            ),
+        ),
+        recorded=recipe_lookup(data_dir) if data_dir is not None else None,
     )
 
 
@@ -101,12 +136,18 @@ def _safe_word(text: str) -> str:
     return " ".join(text.split()).translate(str.maketrans("\\{}", "＼｛｝"))
 
 
-def _word_lines(words: list[Word], active: int, width: int, color: str) -> str:
-    parts = [_safe_word(word.text) for word in words]
-    parts[active] = f"{{\\c&H{color}&}}{parts[active]}{{\\c&HFFFFFF&}}"
-    return r"\N".join(
-        " ".join(parts[index : index + width]) for index in range(0, len(parts), width)
-    )
+def _event_text(lines: tuple[tuple[str, ...], ...], active: int, color: str) -> str:
+    rows, index = [], 0
+    for line in lines:
+        parts = []
+        for text in line:
+            word = _safe_word(text)
+            if index == active:
+                word = rf"{{\c&H{color}&}}{word}{{\c&HFFFFFF&}}"
+            parts.append(word)
+            index += 1
+        rows.append(" ".join(parts))
+    return r"\N".join(rows)
 
 
 def render_ass(words: list[Word], clip: Clip, style: CaptionStyle) -> str:
@@ -118,20 +159,29 @@ def render_ass(words: list[Word], clip: Clip, style: CaptionStyle) -> str:
         f"0,0,0,0,100,100,0,0,1,{style.outline},0,2,100,100,{style.margin_bottom},1\n\n"
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
-    timing = sorted(words, key=lambda word: (word.start, word.end))
-    group_size = style.words_per_line * 2
+    duration = clip.end_s - clip.start_s
+    timed = [
+        TimedWord(
+            max(0.0, word.start - clip.start_s),
+            min(word.end, clip.end_s) - clip.start_s,
+            " ".join(word.text.split()),
+        )
+        for word in sorted(words, key=lambda word: (word.start, word.end))
+    ]
+    timed = [word for word in timed if word.end > word.start and word.text]
     events = []
-    for index, word in enumerate(timing):
-        start = max(0.0, word.start - clip.start_s)
-        end = min(clip.end_s, word.end) - clip.start_s
-        if index + 1 < len(timing):
-            end = min(end, timing[index + 1].start - clip.start_s)
-        first, last = round(start * 100), round(end * 100)
+    for event in caption_events(
+        timed,
+        duration,
+        size=style.size,
+        outline=style.outline,
+        words_per_line=style.words_per_line,
+        max_gap=style.max_gap,
+    ):
+        first, last = round(event.start * 100), round(event.end * 100)
         if last <= first:
             continue
-        group_start = (index // group_size) * group_size
-        parts = timing[group_start : group_start + group_size]
-        line = _word_lines(parts, index - group_start, style.words_per_line, color)
+        line = _event_text(event.lines, event.active, color)
         events.append(
             f"Dialogue: 0,{_ass_time(first)},{_ass_time(last)},Default,,0,0,0,,{line}"
         )
@@ -163,6 +213,7 @@ def burn_clip(
         return False
     if not words:
         raise ValueError(f"Clip {clip.id} has no timed words for captions.")
+    cut_used, used = effective_options(clip, inputs)
     ass = render_ass(words, clip, style)
     with TemporaryDirectory(dir=final.parent) as temp:
         staging = Path(temp)
@@ -219,6 +270,8 @@ def burn_clip(
             clip.status = ClipStatus.CAPTIONED
     with connect(settings.db_path) as db:
         save_clip(db, clip)
+    if cut_used is not None:
+        record_recipe(settings.data_dir, clip.id, cut_used, used)
     return True
 
 
@@ -237,8 +290,14 @@ def caption_source(
     with source_lock(directory, command="captions", wait=wait):
         clips = selected_clips(settings, source_id, directory, clip_id)
         transcript = Transcript.model_validate_json(transcript_path.read_bytes())
+        source, _, _ = load_source(settings, source_id)
         inputs = caption_inputs(
-            directory / "video.mp4", transcript_path, font, style, cut_style(settings)
+            directory / "video.mp4",
+            transcript_path,
+            font,
+            style,
+            cut_style(settings, source.niche),
+            settings.data_dir,
         )
         for clip in clips:
             words = clip_words(transcript, clip.start_s, clip.end_s)

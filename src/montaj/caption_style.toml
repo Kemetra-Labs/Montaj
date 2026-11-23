@@ -1,6 +1,7 @@
 font_family = "Noto Sans Arabic"
-size = 66
-outline = 4.0
+size = 80
+outline = 5.0
 highlight = "FFDC52"
 margin_bottom = 450
 words_per_line = 4
+max_gap = 0.5

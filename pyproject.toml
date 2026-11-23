@@ -8,11 +8,21 @@ license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = ["pydantic>=2,<3", "typer>=0.16,<1"]
 
+[project.optional-dependencies]
+# Scene-aware smart reframing. Without it, renders use the centered crop.
+vision = ["opencv-python-headless>=4.10,<5", "scenedetect>=0.6.7,<0.7"]
+
 [project.scripts]
 montaj = "montaj.cli:app"
 
 [dependency-groups]
-dev = ["mypy>=1,<3", "pytest>=8,<10", "ruff>=0.11,<1"]
+dev = [
+    "mypy>=1,<3",
+    "pytest>=8,<10",
+    "ruff>=0.11,<1",
+    "opencv-python-headless>=4.10,<5",
+    "scenedetect>=0.6.7,<0.7",
+]
 
 [build-system]
 requires = ["uv_build>=0.13.3,<0.14"]
@@ -31,3 +41,7 @@ strict = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["media: requires a local FFmpeg executable"]
+
+[[tool.mypy.overrides]]
+module = ["scenedetect", "scenedetect.*"]
+ignore_missing_imports = true

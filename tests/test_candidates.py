@@ -124,7 +124,9 @@ def test_finds_caches_and_persists_candidates(prepared_source: Settings) -> None
         clip = fetch(db, Clip, clip_id)
         assert clip is not None
         assert clip.status == ClipStatus.CANDIDATE
-        assert (clip.start_s, clip.end_s) == (3, 12.5)
+        # The pick began mid-sentence at 3 s. The clean-up moves it back to the
+        # sentence start at 0 s, which stays within the duration bounds.
+        assert (clip.start_s, clip.end_s) == (0, 12.5)
 
     assert find_candidates(
         settings, 1, bounds=bounds, budget=Budget(1, 1), llm=fake

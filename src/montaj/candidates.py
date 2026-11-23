@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from bisect import bisect_left
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Self
@@ -10,6 +11,7 @@ from typing import Annotated, Self
 import typer
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
 
+from montaj.boundaries import is_duplicate, refine
 from montaj.budget import Budget, BudgetExceeded, BudgetOverride
 from montaj.claude import LLM, Claude, complete_checked
 from montaj.config import Settings
@@ -28,6 +30,9 @@ SENTENCE_END = (".", "?", "!", "؟", "。", "！", "？", "…")
 
 
 _CANDIDATES_MAX_TOKENS = 4096
+# Raw window picks stay cached under the model key. Only this version moves when the
+# deterministic clean-up changes, so a clean-up change never repeats a paid request.
+POSTPROCESS_VERSION = "candidates-post-v2"
 
 
 class MomentType(StrEnum):
@@ -126,19 +131,53 @@ def snap_pick(pick: Pick, words: list[Word], bounds: CandidateBounds) -> Pick | 
     return pick.model_copy(update={"start": start, "end": end})
 
 
-def unique_picks(picks: list[Pick], limit: int = CANDIDATE_LIMIT) -> list[Pick]:
+def unique_picks(
+    picks: list[Pick], limit: int = CANDIDATE_LIMIT, words: Sequence[Word] = ()
+) -> list[Pick]:
+    """Keep picks in priority order unless they overlap or repeat a kept pick."""
     selected: list[Pick] = []
     for candidate in picks:
-        duplicate = any(
-            min(candidate.end, other.end) - max(candidate.start, other.start)
-            >= 0.5 * min(candidate.end - candidate.start, other.end - other.start)
-            for other in selected
-        )
-        if not duplicate:
+        if not is_duplicate(words, candidate, selected):
             selected.append(candidate)
         if len(selected) >= limit:
             break
     return sorted(selected, key=lambda pick: pick.start)
+
+
+def clean_picks(
+    picks: list[Pick], words: Sequence[Word], bounds: CandidateBounds
+) -> list[Pick]:
+    """Whole-sentence edges first, then drop overlaps and near-repeats."""
+    ranked: list[tuple[int, int, Pick]] = []
+    for order, pick in enumerate(picks):
+        edge = refine(
+            pick.start, pick.end, words, bounds.min_seconds, bounds.max_seconds
+        )
+        if edge is None:
+            continue
+        # A pick that was already whole outranks one the clean-up had to repair.
+        quality = int(edge.clean_start) + int(edge.clean_end) - int(edge.moved)
+        moved = pick.model_copy(update={"start": edge.start, "end": edge.end})
+        ranked.append((-quality, order, moved))
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    return unique_picks([pick for _, _, pick in ranked], words=words)
+
+
+def campaign_bounds(
+    bounds: CandidateBounds, campaign: Campaign | None
+) -> CandidateBounds:
+    """Postprocessing never keeps a clip the campaign's duration rule would fail."""
+    if campaign is None:
+        return bounds
+    rules = campaign.rules
+    low = max(bounds.min_seconds, rules.min_seconds)
+    high = min(bounds.max_seconds, rules.max_seconds)
+    if high < low:
+        raise ValueError(
+            f"Candidate bounds {bounds.min_seconds:g}-{bounds.max_seconds:g}s fall outside "
+            f"campaign {campaign.id} rules {rules.min_seconds:g}-{rules.max_seconds:g}s."
+        )
+    return CandidateBounds(min_seconds=low, max_seconds=high)
 
 
 def parse_json_output(response: str) -> str:
@@ -171,6 +210,7 @@ def _window_picks(
     bounds: CandidateBounds,
     cache: Path,
     brief: CampaignBrief | None,
+    final_bounds: CandidateBounds | None = None,
 ) -> list[Pick]:
     words = sorted(transcript.words, key=lambda word: word.start)
     candidates = []
@@ -197,7 +237,7 @@ def _window_picks(
         for candidate in raw:
             if (snapped := snap_pick(candidate, block, bounds)) is not None:
                 candidates.append(snapped)
-    return unique_picks(candidates)
+    return clean_picks(candidates, words, final_bounds or bounds)
 
 
 def _store(
@@ -278,13 +318,19 @@ def find_candidates(
                 encoding="utf-8"
             )
         transcript = Transcript.model_validate_json(transcript_file.read_bytes())
-        key = input_hash(
+        final_bounds = campaign_bounds(bounds, campaign)
+        window_key = input_hash(
             transcript.model_dump(mode="json"),
             template,
             bounds.model_dump(),
             settings.claude_model,
             "candidates-v1",
             *([context_hash] if context_hash is not None else []),
+        )
+        key = input_hash(
+            window_key,
+            POSTPROCESS_VERSION,
+            [float(final_bounds.min_seconds), float(final_bounds.max_seconds)],
         )
         try:
             cached = CandidateSet.model_validate_json(output.read_bytes())
@@ -298,10 +344,10 @@ def find_candidates(
                     for item in cached.candidates
                 ):
                     return cached, True
-        windows_cache = directory / ".candidate-windows" / key
+        windows_cache = directory / ".candidate-windows" / window_key
         windows_cache.mkdir(parents=True, exist_ok=True)
         picks = _window_picks(
-            client, template, transcript, bounds, windows_cache, brief
+            client, template, transcript, bounds, windows_cache, brief, final_bounds
         )
         result = _store(
             settings, source_id, picks, output, key=key, context_hash=context_hash
