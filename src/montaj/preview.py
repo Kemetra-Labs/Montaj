@@ -275,8 +275,18 @@ def handle_preview(
     if jobs is not None and path == JOBS_PATH:
         return 200, content_type, jobs.page(query.get("notice", [""])[0])
     if path == BASE_PATH or path.startswith(f"{BASE_PATH}/"):
+        view = query.get("view", [""])[0]
+        if jobs is None:
+            return dashboard_response(settings, path, view)
         return dashboard_response(
-            settings, path, query.get("view", [""])[0], operations=jobs is not None
+            settings,
+            path,
+            view,
+            operations=True,
+            running=jobs.running(),
+            token=jobs.token,
+            notice=query.get("notice", [""])[0],
+            run_spend=jobs.run_spend(),
         )
     if path in {"", "/"}:
         source_id = parse_source_id(query["source"][0]) if "source" in query else None

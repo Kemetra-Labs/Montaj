@@ -219,6 +219,18 @@ class JobQueue:
             key = activity.stage_key if activity.kind == "stage" else "batch"
             return (activity.source_id or 0, key)
 
+    def run_spend(self) -> tuple[float, float] | None:
+        """Estimated spend of the live run and the per-run ceiling. None when idle."""
+        activity = self.snapshot()
+        if activity is None or not activity.running:
+            return None
+        with connect(self.settings.db_path, read_only=True) as db:
+            spent = db.execute(
+                "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM api_calls WHERE run_id = ?",
+                (activity.run_id,),
+            ).fetchone()[0]
+        return float(spent), Budget.from_settings(self.settings, None).per_run
+
     def submit_stage(self, submission: StageSubmission) -> None:
         self._require_permitted(submission.source)
         budget = Budget.from_settings(self.settings, submission.budget)

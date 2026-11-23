@@ -13,6 +13,7 @@ from montaj.budget import Budget
 from montaj.cli import app
 from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
+from montaj.dashboard import dashboard_response
 from montaj.dashboard_jobs import (
     JOBS_PATH,
     JobQueue,
@@ -654,3 +655,197 @@ def test_stage_post_shows_a_refused_job_as_a_message(
     request = _post_request(settings, jobs, {"source": 7, "stage": "rank"})
     request.send_response.assert_called_once_with(400)
     assert b"Confirm the estimated cost first." in request.wfile.getvalue()
+
+
+def _home(
+    db_path: Path,
+    *,
+    view: str = "",
+    operations: bool = True,
+    running: tuple[int, str] | None = None,
+    run_spend: tuple[float, float] | None = None,
+) -> str:
+    _, _, body = dashboard_response(
+        Settings(data_dir=db_path.parent),
+        "/dashboard",
+        view,
+        operations=operations,
+        running=running,
+        token="board-token",
+        run_spend=run_spend,
+    )
+    return body.decode()
+
+
+def _rows(page: str) -> str:
+    return page.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+
+
+def _add_clip(db_path: Path, status: ClipStatus, source: int = 7) -> None:
+    with connect(db_path) as db:
+        insert(db, Clip(id=1, source_id=source, start_s=0, end_s=5, status=status))
+
+
+def test_home_rows_show_stage_strip_and_next_action(db_path: Path) -> None:
+    _add_source(db_path)
+    page = _home(db_path)
+    row = _rows(page)
+    for label in ("Ingest", "Transcribe", "Candidates + rank", "Cut + captions"):
+        assert label in row
+    assert "Pending" in row and "Blocked" in row
+    assert row.count("<button") == 1 and row.count("<form") == 1
+    assert 'action="/dashboard/jobs"' in row and 'method="post"' in row
+    assert 'name="token" value="board-token"' in row
+    assert 'name="resume" value="7"' in row and ">Resume</button>" in row
+    assert "<form" not in _rows(_home(db_path, operations=False))
+    assert "<button" not in _rows(_home(db_path, operations=False))
+
+
+@pytest.mark.parametrize(
+    ("status", "label", "href"),
+    [
+        (ClipStatus.CHECKED, "Open review", 'href="/?source=7"'),
+        (ClipStatus.APPROVED, "Export", 'href="/?source=7&amp;ready=1"'),
+        (ClipStatus.NEEDS_FIX, "Fix flagged clips", 'href="/dashboard/sources/7"'),
+    ],
+)
+def test_home_review_export_and_fix_actions_are_links(
+    db_path: Path, status: ClipStatus, label: str, href: str
+) -> None:
+    _add_source(db_path)
+    _add_clip(db_path, status)
+    row = _rows(_home(db_path))
+    assert f"{href}>{label}</a>" in row
+    assert "<button" not in row and "<form" not in row
+
+
+def test_home_top_bar_counts_attention_review_and_spend(db_path: Path) -> None:
+    _add_source(db_path)
+    _add_clip(db_path, ClipStatus.CHECKED)
+    with connect(db_path) as db:
+        insert(
+            db,
+            Source(
+                id=8,
+                path="two.mp4",
+                title="Broken",
+                niche=Niche.GAMES,
+                source_allowed=True,
+                speech_status="failed",
+            ),
+        )
+        log_api_call(db, 7, "transcribe", Service.DEEPGRAM, Usage(seconds=12), 0.012345)
+    idle = _home(db_path)
+    assert "<dt>Needs attention</dt><dd>1</dd>" in idle
+    assert "<dt>Clips awaiting review</dt><dd>1</dd>" in idle
+    assert "<dt>Est. source API spend</dt><dd>$0.012345</dd>" in idle
+    assert 'href="/dashboard/jobs">New job</a>' in idle
+    assert "Run spend" not in idle
+    running = _home(db_path, running=(7, "render"), run_spend=(0.5, 5.0))
+    assert "<dt>Run spend</dt><dd>$0.500000 of $5.00 run ceiling</dd>" in running
+    assert "today" not in running.lower()
+
+
+def test_unpermitted_source_row_has_no_run_buttons(db_path: Path) -> None:
+    _add_source(db_path, allowed=False, basis="")
+    page = _home(db_path)
+    row = _rows(page)
+    assert page.count("Record permission for this source first.") == 1
+    assert "before processing" not in page
+    assert "<form" not in row and "<button" not in row
+
+
+@pytest.mark.parametrize(
+    ("running", "message"),
+    [
+        ((2, "render"), "Another job is running (source 2)"),
+        ((0, "batch"), "Another job is running"),
+    ],
+)
+def test_run_buttons_are_disabled_while_a_job_runs(
+    db_path: Path, running: tuple[int, str], message: str
+) -> None:
+    _add_source(db_path)
+    with connect(db_path) as db:
+        insert(
+            db,
+            Source(
+                id=2, path="b.mp4", title="B", niche=Niche.GAMES, source_allowed=True
+            ),
+        )
+    row = _rows(_home(db_path, running=running))
+    assert row.count("<button") == row.count("<button disabled") == 2
+    assert "<form" not in row
+    assert message in row
+    assert (running[0] == 0) == ("(source" not in row)
+
+
+def test_home_escapes_titles_and_errors(db_path: Path) -> None:
+    _add_source(db_path)
+    with connect(db_path) as db:
+        db.execute(
+            "UPDATE sources SET title = ?, speech_status = 'failed', failure_note = ? WHERE id = 7",
+            ("<script>alert(1)</script>", "<script>steal()</script>"),
+        )
+    page = _home(db_path)
+    assert "<script" not in page
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "steal" not in page
+
+
+def test_home_refreshes_only_while_running(db_path: Path) -> None:
+    _add_source(db_path)
+    assert 'http-equiv="refresh"' not in _home(db_path)
+    page = _home(db_path, running=(7, "render"))
+    assert '<meta http-equiv="refresh" content="3">' in page
+
+
+def test_empty_board_points_to_new_job(db_path: Path) -> None:
+    page = _home(db_path)
+    assert "No sources yet" in page
+    assert 'href="/dashboard/jobs">New job</a>' in page
+    assert "<table" not in page
+
+
+def test_handle_preview_passes_live_job_state_to_the_board(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    threads = _capture_threads(monkeypatch)
+    started, finish = Event(), Event()
+
+    def blocked_stage(*_: object, **__: object) -> StageResult:
+        started.set()
+        assert finish.wait(timeout=5)
+        return StageResult("Done.")
+
+    monkeypatch.setattr("montaj.dashboard_jobs.run_board_stage", blocked_stage)
+    idle = handle_preview(settings, "/dashboard?notice=Saved+it", jobs)[2].decode()
+    assert f'name="token" value="{jobs.token}"' in idle and "Saved it" in idle
+    assert 'http-equiv="refresh"' not in idle and jobs.run_spend() is None
+    jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
+    try:
+        assert started.wait(timeout=5)
+        activity = jobs.snapshot()
+        assert activity is not None
+        with connect(db_path) as db:
+            log_api_call(
+                db,
+                7,
+                "draft",
+                Service.DEEPGRAM,
+                Usage(seconds=1),
+                0.25,
+                reservation=activity.run_id,
+            )
+        assert jobs.run_spend() == (0.25, settings.max_cost_per_run_usd)
+        live = handle_preview(settings, "/dashboard", jobs)[2].decode()
+        assert 'http-equiv="refresh"' in live and "<dt>Run spend</dt>" in live
+        assert "Another job is running (source 7)" in live
+    finally:
+        finish.set()
+        threads[0].join(timeout=5)
+    read_only = handle_preview(settings, "/dashboard")[2].decode()
+    assert "<form" not in read_only and 'http-equiv="refresh"' not in read_only
