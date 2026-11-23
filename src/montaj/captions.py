@@ -11,7 +11,7 @@ import typer
 from pydantic import BaseModel, Field
 
 from montaj.config import Settings
-from montaj.cut import render_inputs, selected_clips
+from montaj.cut import CUT_STYLE, cut_style, render_inputs, selected_clips
 from montaj.db import connect, save_clip
 from montaj.ingest import load_source
 from montaj.media import MediaError, atomic_text, file_hash, run_tool, source_lock
@@ -56,6 +56,7 @@ def source_inputs(
         directory / "transcript.json",
         settings.resolved_font_path,
         style,
+        cut_style(settings),
     )
     return ClipInputs(
         source_hash=base.source_hash,
@@ -66,7 +67,11 @@ def source_inputs(
 
 
 def caption_inputs(
-    video: Path, transcript_path: Path, font: Path, style: CaptionStyle
+    video: Path,
+    transcript_path: Path,
+    font: Path,
+    style: CaptionStyle,
+    cut: str = CUT_STYLE,
 ) -> ClipInputs:
     if not font.is_file():
         raise ValueError(
@@ -80,6 +85,7 @@ def caption_inputs(
                 style.model_dump(), file_hash(font), "ass-word-highlight-v1"
             ),
         },
+        style=cut,
     )
 
 
@@ -231,7 +237,9 @@ def caption_source(
     with source_lock(directory, command="captions", wait=wait):
         clips = selected_clips(settings, source_id, directory, clip_id)
         transcript = Transcript.model_validate_json(transcript_path.read_bytes())
-        inputs = caption_inputs(directory / "video.mp4", transcript_path, font, style)
+        inputs = caption_inputs(
+            directory / "video.mp4", transcript_path, font, style, cut_style(settings)
+        )
         for clip in clips:
             words = clip_words(transcript, clip.start_s, clip.end_s)
             changed += burn_clip(settings, clip, inputs, words, style, font)

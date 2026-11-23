@@ -10,6 +10,7 @@ import typer
 from montaj.config import Settings
 from montaj.db import connect, fetch, save_clip
 from montaj.ingest import load_source
+from montaj.loudness import linear_gain_db, measure_loudness
 from montaj.media import MediaError, file_hash, run_tool, source_lock
 from montaj.models import Clip, ClipStage, ClipStatus
 from montaj.pipeline import ClipInputs, is_stale, stage_input_hash
@@ -22,11 +23,30 @@ class Renderer(Protocol):
     def render(self, video: Path, output: Path, start: float, end: float) -> None: ...
 
 
+def cut_style(settings: Settings) -> str:
+    """Name the render recipe so a loudness setting change re-renders the clip."""
+    target = settings.loudness_target_lufs
+    if target is None:
+        return CUT_STYLE
+    return f"{CUT_STYLE}+gain-{target:g}lufs-tp-2-v1"
+
+
 class FFmpegRenderer:
+    def __init__(self, loudness_target: float | None = None) -> None:
+        self.loudness_target = loudness_target
+
+    def _gain_db(self, video: Path, start: float, duration: float) -> float:
+        if self.loudness_target is None:
+            return 0.0
+        heard = measure_loudness(video, start=start, duration=duration)
+        return linear_gain_db(heard.integrated, heard.true_peak, self.loudness_target)
+
     def render(self, video: Path, output: Path, start: float, end: float) -> None:
         duration = end - start
         fade = min(0.15, duration / 2)
         audio_filter = f"afade=t=in:st=0:d={fade:.6f},afade=t=out:st={duration - fade:.6f}:d={fade:.6f}"
+        if gain := self._gain_db(video, start, duration):
+            audio_filter = f"volume={gain:.2f}dB,{audio_filter}"
         run_tool(
             "ffmpeg",
             [
@@ -70,12 +90,16 @@ class FFmpegRenderer:
 
 
 def render_inputs(
-    video: Path, transcript_hash: str = "", options: dict[ClipStage, str] | None = None
+    video: Path,
+    transcript_hash: str = "",
+    options: dict[ClipStage, str] | None = None,
+    *,
+    style: str = CUT_STYLE,
 ) -> ClipInputs:
     return ClipInputs(
         source_hash=file_hash(video),
         transcript_hash=transcript_hash,
-        stage_options={ClipStage.CUT: CUT_STYLE, **(options or {})},
+        stage_options={ClipStage.CUT: style, **(options or {})},
     )
 
 
@@ -166,8 +190,8 @@ def cut_source(
     changed = 0
     with source_lock(directory, command="cut", wait=wait):
         clips = selected_clips(settings, source_id, directory, clip_id)
-        inputs = render_inputs(video)
-        cutter = renderer or FFmpegRenderer()
+        inputs = render_inputs(video, style=cut_style(settings))
+        cutter = renderer or FFmpegRenderer(settings.loudness_target_lufs)
         for clip in clips:
             if clip.end_s > metadata.duration + 0.05:
                 raise ValueError(f"Clip {clip.id} ends after the source video.")
