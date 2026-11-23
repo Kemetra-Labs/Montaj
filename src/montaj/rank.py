@@ -23,7 +23,7 @@ from montaj.candidates import (
     campaign_context_hash,
     parse_json_output,
 )
-from montaj.claude import LLM, Claude
+from montaj.claude import LLM, Claude, complete_checked
 from montaj.config import Settings
 from montaj.db import connect, fetch, save_clip
 from montaj.external import ExternalCallError
@@ -44,7 +44,7 @@ class Grade(BaseModel):
 
 class RankedClip(BaseModel):
     clip_id: int
-    score: float | None
+    score: float | None = Field(ge=1, le=10, allow_inf_nan=False)
     reason: str
     selected: bool
 
@@ -119,7 +119,34 @@ def require_current_rank(
         ) from exc
     if rank.candidate_input_hash != candidates.input_hash:
         raise ValueError("Candidates changed. Rerun rank.")
+    if not _covers_candidates(
+        rank, {pick.clip_id for pick in candidates.candidates}
+    ) or not _valid_selection_order(rank, len(rank.selected_ids)):
+        raise ValueError("Saved ranking is invalid. Rerun rank.")
     return uses_brief
+
+
+def _covers_candidates(rank: RankSet, ids: set[int]) -> bool:
+    return len(rank.clips) == len(ids) and {clip.clip_id for clip in rank.clips} == ids
+
+
+def _valid_selection_order(rank: RankSet, top: int) -> bool:
+    scored = [
+        (clip.score, clip.clip_id) for clip in rank.clips if clip.score is not None
+    ]
+    return scored == sorted(
+        scored, key=lambda item: (-item[0], item[1])
+    ) and rank.selected_ids == [clip_id for _, clip_id in scored[:top]]
+
+
+def _matches_selection(
+    rank: RankSet, ids: set[int], rejected: dict[int, str], top: int
+) -> bool:
+    return (
+        _covers_candidates(rank, ids | rejected.keys())
+        and {clip.clip_id for clip in rank.clips if clip.score is not None} == ids
+        and _valid_selection_order(rank, top)
+    )
 
 
 def has_review_decision(clip: Clip) -> bool:
@@ -191,8 +218,7 @@ def _validated_grades(body: str | bytes, ids: set[int]) -> list[Grade]:
     return grades
 
 
-def _ratings(client: LLM, prompt: str, ids: set[int]) -> list[Grade]:
-    response = client.complete(prompt)
+def _decode_grades(response: str, ids: set[int]) -> list[Grade]:
     if not isinstance(response, str):
         raise ValueError(
             "Claude rank: expected text containing a JSON array of grades."
@@ -284,28 +310,34 @@ def rank_source(
             ),
         )
         selection_hash = input_hash(key, top)
+        ids = {
+            item.clip_id
+            for item in candidates.candidates
+            if item.clip_id not in rejected
+        }
+        damaged_selection = False
         if output.is_file():
             try:
                 prior = load_rank(directory)
             except ValidationError:
                 prior = None
+                damaged_selection = True
             if prior is not None and prior.input_hash == selection_hash:
-                if (
-                    prior.campaign_context_hash != context_hash
-                    or prior.candidate_input_hash != candidates.input_hash
+                if prior.campaign_id == effective_id and _matches_selection(
+                    prior, ids, rejected, top
                 ):
-                    prior.campaign_context_hash = context_hash
-                    prior.candidate_input_hash = candidates.input_hash
-                    atomic_text(output, prior.model_dump_json(indent=2) + "\n")
-                return prior, True
+                    if (
+                        prior.campaign_context_hash != context_hash
+                        or prior.candidate_input_hash != candidates.input_hash
+                    ):
+                        prior.campaign_context_hash = context_hash
+                        prior.candidate_input_hash = candidates.input_hash
+                        atomic_text(output, prior.model_dump_json(indent=2) + "\n")
+                    return prior, True
+                damaged_selection = True
         paid_cache = directory / f".rank-{key}.json"
         grades: list[Grade] = []
         if eligible:
-            ids = {
-                item.clip_id
-                for item in candidates.candidates
-                if item.clip_id not in rejected
-            }
             if paid_cache.is_file():
                 try:
                     grades = _validated_grades(paid_cache.read_bytes(), ids)
@@ -314,6 +346,11 @@ def rank_source(
                         f"Saved rank grade cache is invalid ({exc}). Move {paid_cache.name} aside before retrying."
                     ) from None
             else:
+                if damaged_selection:
+                    raise ValueError(
+                        "Saved ranking is invalid and cached grades are unavailable. "
+                        "Restore a valid backup or back up and move rank.json aside before a paid retry."
+                    )
                 payload: dict[str, object] = {
                     "campaign": campaign_rules,
                     "candidates": eligible,
@@ -325,7 +362,7 @@ def rank_source(
                     + "\n\n"
                     + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
                 )
-                grades = _ratings(
+                grades = complete_checked(
                     llm
                     or Claude(
                         settings,
@@ -339,7 +376,7 @@ def rank_source(
                         else None,
                     ),
                     prompt,
-                    ids,
+                    lambda response: _decode_grades(response, ids),
                 )
                 atomic_text(paid_cache, _grades.dump_json(grades).decode("utf-8"))
         grades.sort(key=lambda item: (-item.score, item.clip_id))

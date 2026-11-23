@@ -11,7 +11,7 @@ import typer
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
 
 from montaj.budget import Budget, BudgetExceeded, BudgetOverride
-from montaj.claude import LLM, Claude
+from montaj.claude import LLM, Claude, complete_checked
 from montaj.config import Settings
 from montaj.db import connect, fetch, insert
 from montaj.external import ExternalCallError
@@ -147,12 +147,15 @@ def parse_json_output(response: str) -> str:
 
 
 def _model_picks(client: LLM, prompt: str) -> list[Pick]:
+    def decode(response: str) -> list[Pick]:
+        return _picks.validate_json(parse_json_output(response))
+
     try:
-        return _picks.validate_json(parse_json_output(client.complete(prompt)))
+        return complete_checked(client, prompt, decode)
     except ValidationError:
         follow_up = prompt + "\nReturn only the JSON array with the specified fields."
     try:
-        return _picks.validate_json(parse_json_output(client.complete(follow_up)))
+        return complete_checked(client, follow_up, decode)
     except ValidationError:
         raise ValueError("Claude returned invalid candidate JSON twice.") from None
 

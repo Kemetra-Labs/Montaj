@@ -9,6 +9,8 @@ from pydantic import SecretStr
 from montaj.budget import Budget, BudgetExceeded
 from montaj.candidates import CandidateSet, SavedPick
 from montaj.config import Settings
+from montaj.costs import cost_totals
+from montaj.cut import selected_clips
 from montaj.db import connect, fetch, insert, save_clip
 from montaj.external import ExternalCallError
 from montaj.models import Campaign, CampaignRules, Clip, ClipStatus, Platform, utc_now
@@ -273,3 +275,111 @@ def test_invalid_paid_cache_preserves_prior_selection_without_spending(
         )
     assert len(llm.prompts) == 1
     assert (directory / "rank.json").read_bytes() == previous
+
+
+@pytest.mark.parametrize("damage", ["missing", "duplicate", "selection"])
+def test_damaged_current_ranking_is_recovered_from_grades(
+    thirty_candidates: Settings, damage: str
+) -> None:
+    answers = [grade(i, {5: 9, 19: 10, 28: 9}.get(i, 5)) for i in range(1, 31)]
+    llm = FakeLLM([json.dumps(answers)])
+    original, _ = rank_source(
+        thirty_candidates, 1, campaign_id=None, top=3, budget=Budget(1, 1), llm=llm
+    )
+    path = thirty_candidates.data_dir / "sources/1/rank.json"
+    body = json.loads(path.read_bytes())
+    if damage == "missing":
+        body["clips"].pop(0)
+    elif damage == "duplicate":
+        body["clips"][-1] = body["clips"][0]
+    else:
+        body["clips"][0]["selected"] = False
+        body["clips"][3]["selected"] = True
+    path.write_text(json.dumps(body), encoding="utf-8")
+    with pytest.raises(ValueError, match="Saved ranking is invalid"):
+        selected_clips(thirty_candidates, 1, path.parent)
+    recovered, reused = rank_source(
+        thirty_candidates, 1, campaign_id=None, top=3, budget=Budget(0, 0), llm=llm
+    )
+    assert not reused
+    assert recovered == original
+    assert recovered.selected_ids == [19, 5, 28]
+    assert len(llm.prompts) == 1
+
+
+def test_damaged_selection_without_grades_requires_explicit_recovery(
+    thirty_candidates: Settings,
+) -> None:
+    llm = FakeLLM([json.dumps([grade(i) for i in range(1, 31)])])
+    rank_source(
+        thirty_candidates, 1, campaign_id=None, top=3, budget=Budget(1, 1), llm=llm
+    )
+    directory = thirty_candidates.data_dir / "sources/1"
+    (grades,) = directory.glob(".rank-*.json")
+    grades.rename(directory / "saved-grades.json")
+    path = directory / "rank.json"
+    path.write_text("{", encoding="utf-8")
+    with pytest.raises(ValueError, match="cached grades are unavailable"):
+        rank_source(
+            thirty_candidates, 1, campaign_id=None, top=3, budget=Budget(1, 1), llm=llm
+        )
+    assert path.read_bytes() == b"{"
+    assert len(llm.prompts) == 1
+
+
+@pytest.mark.parametrize(
+    ("reason", "body", "error", "message"),
+    [
+        ("max_tokens", "[]", ExternalCallError, "truncated"),
+        ("model_context_window_exceeded", "[]", ExternalCallError, "context limit"),
+        ("refusal", "[]", ExternalCallError, "declined"),
+        ("stop_sequence", "[]", ExternalCallError, "complete response"),
+        (None, "[]", ExternalCallError, "complete response"),
+        ("end_turn", "[]", ValueError, "missing candidate IDs"),
+        (
+            "end_turn",
+            '{"private-completion":',
+            ValueError,
+            "invalid or incomplete JSON",
+        ),
+    ],
+)
+def test_rejected_rank_completion_counts_as_failed_at_reported_usage(
+    thirty_candidates: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    reason: str | None,
+    body: str,
+    error: type[Exception],
+    message: str,
+) -> None:
+    settings = thirty_candidates.model_copy(
+        update={"anthropic_api_key": SecretStr("offline-fake")}
+    )
+    requests = []
+
+    def send(request: Request, *, timeout: int) -> BytesIO:
+        requests.append(request.data)
+        return BytesIO(
+            json.dumps(
+                {
+                    "content": [{"type": "text", "text": body}],
+                    "stop_reason": reason,
+                    "usage": {"input_tokens": 1500, "output_tokens": 610},
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr("montaj.claude.urlopen", send)
+    with pytest.raises(error, match=message) as raised:
+        rank_source(settings, 1, campaign_id=None, top=3, budget=Budget(1, 1))
+    assert "private-completion" not in str(raised.value)
+    assert len(requests) == 1
+    assert not (settings.data_dir / "sources/1/rank.json").exists()
+    with connect(settings.db_path) as db:
+        row = db.execute(
+            "SELECT input_tokens, output_tokens, outcome FROM api_calls"
+        ).fetchone()
+        totals = cost_totals(db, 1)
+    assert tuple(row) == (1500, 610, "failure")
+    assert totals.approved_clips == 0
+    assert totals.total == pytest.approx(0.0091)

@@ -33,7 +33,7 @@ It is built for **one operator** running content-rewards campaigns across three 
 - **Hooks that follow the transcript** — two hook options, a caption, and hashtags per clip, written in the target account's style.
 - **Campaign compliance check** — length, banned words, required hashtags, disclosure, duplicate posts, and daily caps are checked before review, and re-checked after every edit.
 - **Human review gate** — watch clips in a read-only local preview, trim, pick a hook, approve or reject. A failed check cannot be approved.
-- **Cost ceilings** — per-run and per-source spending caps stop paid API calls before they overshoot. `montaj costs` shows exactly what you spent.
+- **Cost ceilings** — per-run and per-source spending caps check the estimated cost before each paid API call. `montaj costs` reports estimated spend and call outcomes.
 - **Resumable stages** — every stage persists its output and is skipped when its inputs have not changed. `run` stops at the first failure and resumes there.
 - **Full audit trail** — SQLite logs every source, clip, check, approval, export, and manual post.
 

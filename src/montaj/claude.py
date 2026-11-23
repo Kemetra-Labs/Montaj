@@ -1,6 +1,7 @@
 """Small, cost-logged Claude Messages API adapter."""
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 from urllib.request import Request, urlopen
@@ -8,7 +9,13 @@ from urllib.request import Request, urlopen
 from montaj.budget import Budget
 from montaj.config import Settings
 from montaj.costs import Service, Usage
-from montaj.external import CallContext, CallResult, ExternalCallError, call_external
+from montaj.external import (
+    CallContext,
+    CallResult,
+    ExternalCallError,
+    RejectedResponse,
+    call_external,
+)
 
 
 class LLM(Protocol):
@@ -75,6 +82,9 @@ class Claude:
         )
 
     def complete(self, prompt: str) -> str:
+        return self._complete(prompt, str)
+
+    def _complete[T](self, prompt: str, decode: Callable[[str], T]) -> T:
         key = self.settings.anthropic_api_key
         if key is None:
             raise ValueError("Set ANTHROPIC_API_KEY before requesting Claude output.")
@@ -91,24 +101,43 @@ class Claude:
             self.settings.claude_model,
             self.budget,
         )
-        response = call_external(
+
+        def request() -> CallResult[T]:
+            result = self._request(prompt, key.get_secret_value())
+            try:
+                self._check_completion(result.value)
+                value = decode(result.value.text)
+            except (ValueError, ExternalCallError) as exc:
+                raise RejectedResponse(result.usage, exc) from None
+            return CallResult(value, result.usage)
+
+        return call_external(
             ctx,
             estimated,
-            lambda: self._request(prompt, key.get_secret_value()),
+            request,
             policy=self.settings.retry,
         )
-        # HTTP success still incurs usage. Check completion only after settling the call.
-        if self.require_complete and response.stop_reason != "end_turn":
-            if response.stop_reason == "max_tokens":
-                detail = (
-                    f"output truncated at {response.output_tokens} tokens "
-                    f"(limit {self.max_tokens}). Increase ranking output headroom or reduce eligible candidates before retrying."
-                )
-            elif response.stop_reason == "model_context_window_exceeded":
-                detail = "output truncated at the model context limit. Reduce eligible candidates before retrying."
-            elif response.stop_reason == "refusal":
-                detail = "Claude declined to return grades. Review the source and ranking prompt before retrying."
-            else:
-                detail = "Claude did not confirm a complete response. Check the model response format before retrying."
-            raise ExternalCallError(f"claude {self.stage}: {detail}")
-        return response.text
+
+    def _check_completion(self, response: Completion) -> None:
+        reason = response.stop_reason
+        if reason == "max_tokens":
+            detail = (
+                f"output truncated at {response.output_tokens} tokens "
+                f"(limit {self.max_tokens}). Review output headroom before retrying."
+            )
+        elif reason == "model_context_window_exceeded":
+            detail = "output truncated at the model context limit. Review request size before retrying."
+        elif reason == "refusal":
+            detail = "Claude declined to complete the request. Review the source and prompt before retrying."
+        elif self.require_complete and reason != "end_turn":
+            detail = "Claude did not confirm a complete response. Check the model response format before retrying."
+        else:
+            return
+        raise ExternalCallError(f"claude {self.stage}: {detail}")
+
+
+def complete_checked[T](client: LLM, prompt: str, decode: Callable[[str], T]) -> T:
+    """Validate model output while the production adapter still has its usage."""
+    if isinstance(client, Claude):
+        return client._complete(prompt, decode)
+    return decode(client.complete(prompt))
