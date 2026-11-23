@@ -23,9 +23,9 @@ def _add_source(db_path: Path, **fields: object) -> Settings:
     return settings
 
 
-def _add_clip(db_path: Path, status: ClipStatus) -> None:
+def _add_clip(db_path: Path, status: ClipStatus, clip_id: int = 1) -> None:
     with connect(db_path) as db:
-        insert(db, Clip(id=1, source_id=1, start_s=0, end_s=5, status=status))
+        insert(db, Clip(id=clip_id, source_id=1, start_s=0, end_s=5, status=status))
 
 
 def _imported(settings: Settings, *extra: str) -> None:
@@ -171,6 +171,28 @@ def test_speech_failure_marks_transcribe_failed_with_fixed_wording(
     assert "secret" not in cells["transcribe"].reason
     assert cells["rank"].state is CellState.BLOCKED
     assert cells["rank"].reason == "Transcribe first"
+    assert row.action == NextAction("resume", "Retry")
+
+
+def test_failed_ingest_offers_retry_action(db_path: Path) -> None:
+    settings = _add_source(db_path)
+    directory = settings.data_dir / "sources/1"
+    directory.mkdir(parents=True)
+    (directory / "meta.json").write_text(_META, encoding="utf-8")
+    (row,) = build_rows(settings, running=None)
+    cells = {cell.key: cell for cell in row.cells}
+    assert cells["ingest"].state is CellState.FAILED
+    assert cells["transcribe"].state is CellState.BLOCKED
+    assert row.action == NextAction("resume", "Retry")
+
+
+def test_fix_action_outranks_review_when_clips_are_mixed(db_path: Path) -> None:
+    settings = _add_source(db_path)
+    _ranked(settings)
+    _add_clip(db_path, ClipStatus.NEEDS_FIX)
+    _add_clip(db_path, ClipStatus.CHECKED, clip_id=2)
+    (row,) = build_rows(settings, running=None)
+    assert row.action is not None and row.action.kind == "fix"
 
 
 def test_source_id_limits_rows(db_path: Path) -> None:

@@ -143,6 +143,8 @@ def _action(
         return NextAction("export", "Export")
     if any(cell.state is CellState.PENDING for cell in cells):
         return NextAction("resume", "Resume")
+    if any(cell.state is CellState.FAILED for cell in cells):
+        return NextAction("resume", "Retry")
     return None
 
 
