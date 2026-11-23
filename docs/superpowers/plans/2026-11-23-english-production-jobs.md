@@ -18,4 +18,4 @@
 - [x] Add a loopback-only job form for individual YouTube video URLs and files in the Montaj inbox. Run one dashboard job at a time and show stage, run spend and retry controls.
 - [x] Accept writes only on the operations dashboard with a same-origin form token. Keep the standalone preview read-only.
 - [x] Add source timestamps, check findings and human approval controls to the batch preview. Use the existing export checks to package only approved clips from the selected source.
-- [ ] Test validation and review/export guards, run Ruff, mypy and pytest, and open the implementation PR.
+- [x] Test validation and review/export guards, run Ruff, mypy and pytest, and open the implementation PR.

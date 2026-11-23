@@ -1,5 +1,7 @@
 import json
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 
@@ -285,6 +287,43 @@ def test_job_backfills_failed_checks_and_reuses_paid_work(
         renderer=_Renderer(),
     )
     assert resumed.ready == [2] and resumed.previously_approved == 1
+    assert ready.final_path
+    (prepared_source.data_dir / ready.final_path).unlink()
+    resumed = produce_batch(
+        prepared_source,
+        1,
+        top=1,
+        budget=Budget(1, 1),
+        backend=backend,
+        llm=model,
+        renderer=_Renderer(),
+    )
+    assert resumed.ready == [] and resumed.previously_approved == 0 and resumed.stop
+    with connect(prepared_source.db_path) as db:
+        stored = fetch(db, Clip, 2)
+    assert stored is not None and stored.status == ClipStatus.APPROVED
+
+
+def test_job_reloads_the_campaign_after_acquiring_the_source_lock(
+    prepared_source: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _campaign(prepared_source)
+    with connect(prepared_source.db_path) as db:
+        db.execute(
+            "UPDATE sources SET allowed_basis = 'fixture permission' WHERE id = 1"
+        )
+
+    @contextmanager
+    def unlink_just_before_lock(path: Path, *, command: str) -> Iterator[None]:
+        with connect(prepared_source.db_path) as db:
+            db.execute("UPDATE sources SET campaign_id = NULL WHERE id = 1")
+        yield
+
+    monkeypatch.setattr("montaj.job.source_lock", unlink_just_before_lock)
+    backend = _Backend()
+    with pytest.raises(ValueError, match="needs a campaign"):
+        produce_batch(prepared_source, 1, top=1, budget=Budget(1, 1), backend=backend)
+    assert backend.calls == 0
 
 
 def test_job_uses_the_permission_and_budget_guards(

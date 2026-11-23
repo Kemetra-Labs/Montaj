@@ -4,6 +4,7 @@ import sqlite3
 import wave
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from time import perf_counter
 from typing import Annotated
 
@@ -11,7 +12,7 @@ import typer
 
 from montaj.budget import Budget, BudgetExceeded, BudgetOverride
 from montaj.candidates import CANDIDATE_LIMIT, CandidateBounds, find_candidates
-from montaj.captions import caption_source
+from montaj.captions import caption_source, source_inputs
 from montaj.check import check_source
 from montaj.claude import LLM
 from montaj.config import Settings
@@ -21,8 +22,10 @@ from montaj.draft import draft_source
 from montaj.external import ExternalCallError
 from montaj.ingest import Downloader, ingest_video, load_source
 from montaj.media import MediaError, reuse_file_hash, source_lock
-from montaj.models import Campaign, CheckResult, Clip, ClipStatus, Niche
+from montaj.models import Campaign, CampaignRules, CheckResult, Clip, ClipStatus, Niche
+from montaj.pipeline import input_hash
 from montaj.rank import has_review_decision, rank_source
+from montaj.review import approval_problem
 from montaj.transcribe import Transcriber, transcribe_source
 
 DEFAULT_TARGET = 10
@@ -55,6 +58,34 @@ class JobResult:
         )
 
 
+def _retain_approval(
+    settings: Settings, directory: Path, clip: Clip, rules: CampaignRules
+) -> bool:
+    if clip.status not in (ClipStatus.APPROVED, ClipStatus.EXPORTED, ClipStatus.POSTED):
+        return False
+    if not clip.final_path:
+        return False
+    relative = Path(clip.final_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        return False
+    root = settings.data_dir.resolve()
+    render = (root / relative).resolve()
+    if not render.is_relative_to(root) or not render.is_file():
+        return False
+    inputs = source_inputs(
+        settings, directory, rules_hash=input_hash(rules.compliance_payload())
+    )
+    return approval_problem(clip, inputs) is None
+
+
+def _job_rules(settings: Settings, campaign_id: int | None) -> CampaignRules:
+    with connect(settings.db_path, read_only=True) as db:
+        campaign = fetch(db, Campaign, campaign_id) if campaign_id else None
+    if campaign is None:
+        raise ValueError("This source needs a campaign before it can run as a job.")
+    return campaign.rules
+
+
 def produce_batch(
     settings: Settings,
     source_id: int,
@@ -68,26 +99,21 @@ def produce_batch(
 ) -> JobResult:
     if not 1 <= top <= CANDIDATE_LIMIT:
         raise ValueError(f"Choose a clip target between 1 and {CANDIDATE_LIMIT}.")
-    source, metadata, directory = load_source(settings, source_id)
-    if not (source.allowed_basis or "").strip():
-        raise ValueError(
-            "Record a permission basis on the source before creating a job."
-        )
-    with connect(settings.db_path, read_only=True) as db:
-        campaign = (
-            fetch(db, Campaign, source.campaign_id) if source.campaign_id else None
-        )
-    if campaign is None:
-        raise ValueError("This source needs a campaign before it can run as a job.")
-    rules = campaign.rules
-    bounds = CandidateBounds(
-        min_seconds=rules.min_seconds, max_seconds=rules.max_seconds
-    )
+    _, _, directory = load_source(settings, source_id)
     result = JobResult(source_id, top)
     with (
         source_lock(directory, command="job"),
         reuse_file_hash(directory / "video.mp4"),
     ):
+        source, metadata, _ = load_source(settings, source_id)
+        if not (source.allowed_basis or "").strip():
+            raise ValueError(
+                "Record a permission basis on the source before creating a job."
+            )
+        rules = _job_rules(settings, source.campaign_id)
+        bounds = CandidateBounds(
+            min_seconds=rules.min_seconds, max_seconds=rules.max_seconds
+        )
         try:
             progress("Transcribing English audio")
             transcribe_source(
@@ -113,11 +139,7 @@ def produce_batch(
                 if clip is None or clip.source_id != source_id:
                     raise ValueError(f"Ranked clip {clip_id} is missing. Rerun rank.")
                 if has_review_decision(clip):
-                    if clip.status in (
-                        ClipStatus.APPROVED,
-                        ClipStatus.EXPORTED,
-                        ClipStatus.POSTED,
-                    ):
+                    if _retain_approval(settings, directory, clip, rules):
                         result.ready.append(clip_id)
                         result.previously_approved += 1
                     continue

@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass, field, replace
 from html import escape
+from pathlib import Path, PureWindowsPath
 from secrets import compare_digest, token_urlsafe
 from threading import Lock, Thread
 from time import perf_counter
@@ -59,8 +60,12 @@ def dashboard_location(settings: Settings, supplied: str) -> str:
         ):
             raise ValueError("Enter an individual YouTube video URL or use the inbox.")
         return location
+    relative = Path(location)
+    windows = PureWindowsPath(location)
+    if relative.anchor or windows.anchor or ".." in windows.parts:
+        raise ValueError("Use a filename relative to the Montaj inbox.")
     inbox = (settings.data_dir / "inbox").resolve()
-    path = (inbox / location).resolve()
+    path = (inbox / relative).resolve()
     if not path.is_relative_to(inbox) or not path.is_file():
         raise ValueError("Use an existing file inside the Montaj inbox.")
     return str(path)
@@ -88,12 +93,8 @@ class JobQueue:
         self._lock = Lock()
         self._activity: Activity | None = None
 
-    def accepts(self, host: str, origin: str, token: str) -> bool:
-        return (
-            origin == f"http://{host}"
-            and token.isascii()
-            and compare_digest(token, self.token)
-        )
+    def accepts_token(self, token: str) -> bool:
+        return token.isascii() and compare_digest(token, self.token)
 
     def snapshot(self) -> Activity | None:
         with self._lock:
@@ -137,7 +138,8 @@ class JobQueue:
         try:
             source_id = submission.resume
             if source_id is None:
-                assert submission.campaign is not None and submission.niche is not None
+                if submission.campaign is None or submission.niche is None:
+                    raise ValueError("Choose a campaign and niche.")
                 progress("Importing permitted video")
                 source_id = start_job(
                     self.settings,

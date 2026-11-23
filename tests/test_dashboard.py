@@ -1,18 +1,22 @@
+from collections.abc import Callable
 from email.message import Message
 from io import BytesIO
 from pathlib import Path
+from threading import Thread
 from unittest.mock import Mock
 from urllib.parse import urlencode
 
 import pytest
 from typer.testing import CliRunner
 
+from montaj.budget import Budget
 from montaj.cli import app
 from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
-from montaj.dashboard_jobs import JOBS_PATH, JobQueue, dashboard_location
+from montaj.dashboard_jobs import JOBS_PATH, JobQueue, Submission, dashboard_location
 from montaj.db import connect, insert
 from montaj.ingest import SourceMetadata
+from montaj.job import JobResult
 from montaj.models import CheckResult, Clip, ClipStatus, Niche, Source
 from montaj.preview import _handler, handle_preview
 
@@ -155,9 +159,46 @@ def test_dashboard_jobs_only_accept_youtube_or_an_inbox_file(db_path: Path) -> N
         "https://localhost/video",
         "https://youtube.com:444/v",
         "https://youtube.com/redirect?q=https://example.com",
+        r"\\server\share\video.mp4",
+        r"C:video.mp4",
     ):
         with pytest.raises(ValueError):
             dashboard_location(settings, location)
+
+
+def test_dashboard_job_worker_exposes_its_batch_result(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    threads: list[Thread] = []
+
+    def worker(
+        *, target: Callable[..., None], args: tuple[object, ...], daemon: bool
+    ) -> Thread:
+        thread = Thread(target=target, args=args, daemon=daemon)
+        threads.append(thread)
+        return thread
+
+    def fake_batch(
+        settings: Settings,
+        source: int,
+        *,
+        top: int,
+        budget: Budget,
+        progress: Callable[[str], None],
+    ) -> JobResult:
+        assert source == 7 and top == 2
+        progress("Checking clips")
+        return JobResult(source, top, ready=[3, 4])
+
+    monkeypatch.setattr("montaj.dashboard_jobs.Thread", worker)
+    monkeypatch.setattr("montaj.dashboard_jobs.produce_batch", fake_batch)
+    jobs.submit(Submission(resume=7, top=2))
+    threads[0].join(timeout=5)
+    assert not threads[0].is_alive()
+    page = jobs.page()
+    assert b"2/2 clips ready" in page and b"/?source=7&amp;ready=1" in page
 
 
 @pytest.mark.parametrize(
@@ -165,6 +206,7 @@ def test_dashboard_jobs_only_accept_youtube_or_an_inbox_file(db_path: Path) -> N
     [
         (False, "http://127.0.0.1:8765", True, 405),
         (True, "https://other.example", True, 403),
+        (True, "http://127.0.0.1:8765/path", True, 403),
         (True, "http://127.0.0.1:8765", False, 403),
         (True, "http://127.0.0.1:8765", True, 303),
     ],

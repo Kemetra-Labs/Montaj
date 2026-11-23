@@ -382,8 +382,10 @@ def _handler(
 ) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def _local_request(self) -> bool:
-            hostname = self.headers.get("Host", "").partition(":")[0].lower()
-            if hostname not in {"127.0.0.1", "localhost"}:
+            hostname, separator, port = self.headers.get("Host", "").partition(":")
+            if hostname.lower() not in {"127.0.0.1", "localhost"} or (
+                separator and (not port.isascii() or not port.isdecimal())
+            ):
                 self.send_error(400, "Use a localhost address")
                 return False
             return True
@@ -422,7 +424,9 @@ def _handler(
             }:
                 self.send_error(405)
                 return
-            if self.headers.get("Origin") != f"http://{self.headers.get('Host', '')}":
+            if not _same_origin(
+                self.headers.get("Host", ""), self.headers.get("Origin", "")
+            ):
                 self.send_error(403)
                 return
             if self.headers.get_content_type() != FORM_TYPE:
@@ -442,11 +446,7 @@ def _handler(
                         max_num_fields=16,
                     ).items()
                 }
-                if not jobs.accepts(
-                    self.headers.get("Host", ""),
-                    self.headers.get("Origin", ""),
-                    form.get("token", ""),
-                ):
+                if not jobs.accepts_token(form.get("token", "")):
                     self.send_error(403)
                     return
                 location = _post_action(settings, jobs, self.path, form)
@@ -475,6 +475,18 @@ def _handler(
             return
 
     return Handler
+
+
+def _same_origin(host: str, origin: str) -> bool:
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.netloc == host
+        and not (parsed.path or parsed.query or parsed.fragment)
+    )
 
 
 def serve_preview(

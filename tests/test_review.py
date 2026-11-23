@@ -12,6 +12,7 @@ from montaj.models import (
     Niche,
     Platform,
     Source,
+    utc_now,
 )
 from montaj.review import review_source
 
@@ -129,6 +130,34 @@ def test_reject_stores_a_one_word_reason(
     assert stored.status == ClipStatus.REJECTED
     assert stored.decision_reason == "offtopic"
     assert stored.reviewed_at is not None
+
+
+def test_terminal_review_cannot_overwrite_a_decision_from_another_client(
+    prepared_source: Settings, ranked_clip: Clip
+) -> None:
+    _prepare(prepared_source, ranked_clip, result=CheckResult.PASS)
+
+    def review_elsewhere(prompt: str) -> str:
+        assert prompt == "Review key"
+        with connect(prepared_source.db_path) as db:
+            clip = fetch(db, Clip, 1)
+            assert clip is not None
+            clip.status = ClipStatus.REJECTED
+            clip.reviewed_at = utc_now()
+            save_clip(db, clip)
+        return "a"
+
+    messages: list[str] = []
+    assert (
+        review_source(
+            prepared_source, 1, reader=review_elsewhere, writer=messages.append
+        )
+        == 0
+    )
+    assert any("clip changed" in message for message in messages)
+    with connect(prepared_source.db_path) as db:
+        clip = fetch(db, Clip, 1)
+    assert clip is not None and clip.status == ClipStatus.REJECTED
 
 
 def test_edits_rerun_only_the_affected_stages(
