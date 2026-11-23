@@ -6,6 +6,7 @@ from montaj import stage_jobs
 from montaj.budget import Budget, BudgetExceeded
 from montaj.check import ClipCheck
 from montaj.config import Settings
+from montaj.dashboard_jobs import JobQueue, StageSubmission
 from montaj.db import connect, insert
 from montaj.models import (
     Campaign,
@@ -22,6 +23,7 @@ from montaj.stage_jobs import (
     StageResult,
     run_board_stage,
 )
+from tests.dashboard_helpers import _capture_threads
 
 _BUDGET = Budget(1.0, 1.0)
 
@@ -437,3 +439,23 @@ def test_budget_stop_mid_draft_reports_how_many_clips_finished(
     result = _run(batch, BoardStage.DRAFT, [], top=5)
     assert result.problem == "Run budget reached."
     assert result.summary == "Stopped during draft after 2 clips."
+
+
+def test_job_queue_runs_the_real_stage_runner_to_a_finished_activity(
+    batch: Settings, monkeypatch: pytest.MonkeyPatch, recorder: Recorder
+) -> None:
+    jobs = JobQueue(batch)
+    threads = _capture_threads(monkeypatch)
+    recorder.outcomes = {2: CheckResult.FAIL}
+    jobs.submit_stage(
+        StageSubmission(source=1, stage=BoardStage.DRAFT, top=2, confirm=True)
+    )
+    threads[0].join(timeout=5)
+    activity = jobs.snapshot()
+    assert activity is not None and not activity.running
+    assert activity.summary == (
+        "Drafted and checked 2 clips: 1 passed, 0 warnings, 1 failed (clip 2)."
+    )
+    assert activity.problem == "" and activity.stage == "Checking clip 2"
+    assert recorder.calls == [("draft", 1), ("check", 1), ("draft", 2), ("check", 2)]
+    assert jobs.running() is None
