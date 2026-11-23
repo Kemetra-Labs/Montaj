@@ -13,12 +13,20 @@ from montaj.budget import Budget
 from montaj.cli import app
 from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
-from montaj.dashboard_jobs import JOBS_PATH, JobQueue, Submission, dashboard_location
+from montaj.dashboard_jobs import (
+    JOBS_PATH,
+    JobQueue,
+    StageSubmission,
+    Submission,
+    dashboard_location,
+)
 from montaj.db import connect, insert
 from montaj.ingest import SourceMetadata
 from montaj.job import JobResult
+from montaj.media import MediaError
 from montaj.models import CheckResult, Clip, ClipStatus, Niche, Source
 from montaj.preview import _handler, handle_preview
+from montaj.stage_jobs import PAID_STAGES, BoardStage, StageResult
 
 
 def test_overview_uses_saved_sources_and_filters_attention(db_path: Path) -> None:
@@ -266,3 +274,383 @@ def test_job_post_requires_the_operations_server_and_same_origin_token(
     else:
         request.send_error.assert_called_once_with(status)
         submit.assert_not_called()
+
+
+STAGE_PATH = "/dashboard/stage"
+
+
+def _add_source(
+    db_path: Path, *, allowed: bool = True, basis: str = "Creator approval"
+) -> None:
+    with connect(db_path) as db:
+        insert(
+            db,
+            Source(
+                id=7,
+                path="input.mp4",
+                title="Interview",
+                niche=Niche.HEALTH,
+                source_allowed=allowed,
+                allowed_basis=basis,
+            ),
+        )
+
+
+def _capture_threads(monkeypatch: pytest.MonkeyPatch) -> list[Thread]:
+    threads: list[Thread] = []
+
+    def worker(
+        *, target: Callable[..., None], args: tuple[object, ...], daemon: bool
+    ) -> Thread:
+        thread = Thread(target=target, args=args, daemon=daemon)
+        threads.append(thread)
+        return thread
+
+    monkeypatch.setattr("montaj.dashboard_jobs.Thread", worker)
+    return threads
+
+
+def test_stage_submit_runs_one_stage_and_blocks_a_second_job(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    started, finish = Event(), Event()
+
+    def fake_stage(
+        settings: Settings,
+        source: int,
+        stage: BoardStage,
+        *,
+        top: int,
+        budget: Budget,
+        progress: Callable[[str], None],
+        retry_failed: bool = False,
+    ) -> StageResult:
+        assert (source, stage, top, retry_failed) == (7, BoardStage.RENDER, 3, True)
+        progress("Rendering clip 4")
+        started.set()
+        assert finish.wait(timeout=5)
+        return StageResult("Rendered and captioned 1 clip.")
+
+    monkeypatch.setattr("montaj.dashboard_jobs.run_board_stage", fake_stage)
+    assert jobs.running() is None
+    jobs.submit_stage(
+        StageSubmission(source=7, stage=BoardStage.RENDER, top=3, retry=True)
+    )
+    try:
+        assert started.wait(timeout=5)
+        with pytest.raises(ValueError, match="already running"):
+            jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
+        with pytest.raises(ValueError, match="already running"):
+            jobs.submit(Submission(resume=7))
+        activity = jobs.snapshot()
+        assert activity is not None and activity.stage == "Rendering clip 4"
+        assert jobs.running() == (7, "render")
+    finally:
+        finish.set()
+        threads[0].join(timeout=5)
+    assert len(threads) == 1 and not threads[0].is_alive()
+    activity = jobs.snapshot()
+    assert activity is not None and not activity.running
+    assert activity.summary == "Rendered and captioned 1 clip." and not activity.problem
+    assert jobs.running() is None
+
+
+@pytest.mark.parametrize("stage", sorted(PAID_STAGES))
+def test_paid_stage_without_confirm_starts_nothing(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, stage: BoardStage
+) -> None:
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    runner = Mock(return_value=StageResult("Done."))
+    monkeypatch.setattr("montaj.dashboard_jobs.run_board_stage", runner)
+    with pytest.raises(ValueError, match="Confirm the estimated cost"):
+        jobs.submit_stage(StageSubmission(source=7, stage=stage))
+    runner.assert_not_called()
+    assert threads == [] and jobs.snapshot() is None
+    jobs.submit_stage(StageSubmission(source=7, stage=stage, confirm=True))
+    threads[0].join(timeout=5)
+    runner.assert_called_once()
+
+
+def test_free_stage_runs_without_confirm(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    runner = Mock(return_value=StageResult("Rendered.", problem="Budget stop."))
+    monkeypatch.setattr("montaj.dashboard_jobs.run_board_stage", runner)
+    jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
+    threads[0].join(timeout=5)
+    runner.assert_called_once()
+    activity = jobs.snapshot()
+    assert activity is not None and not activity.running
+    assert (activity.summary, activity.problem) == ("Rendered.", "Budget stop.")
+
+
+@pytest.mark.parametrize(
+    ("allowed", "basis", "source"),
+    [(False, "Creator approval", 7), (True, "  ", 7), (True, "Creator approval", 99)],
+)
+def test_stage_on_unpermitted_or_unknown_source_is_refused(
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allowed: bool,
+    basis: str,
+    source: int,
+) -> None:
+    _add_source(db_path, allowed=allowed, basis=basis)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    runner = Mock()
+    monkeypatch.setattr("montaj.dashboard_jobs.run_board_stage", runner)
+    with pytest.raises(ValueError, match="not found|permission"):
+        jobs.submit_stage(StageSubmission(source=source, stage=BoardStage.RENDER))
+    runner.assert_not_called()
+    assert threads == [] and jobs.snapshot() is None
+
+
+def test_locked_source_reports_holder_in_activity_problem(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    monkeypatch.setattr(
+        "montaj.dashboard_jobs.run_board_stage",
+        Mock(side_effect=MediaError("Source 7 is locked, held by cut (pid 12).")),
+    )
+    jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
+    threads[0].join(timeout=5)
+    activity = jobs.snapshot()
+    assert activity is not None and not activity.running
+    assert "held by cut" in activity.problem
+    assert activity.summary == "Stopped during render."
+    assert jobs.running() is None
+
+
+def test_unexpected_stage_error_still_ends_the_job(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    monkeypatch.setattr(
+        "montaj.dashboard_jobs.run_board_stage",
+        Mock(side_effect=RuntimeError("secret detail")),
+    )
+    jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
+    threads[0].join(timeout=5)
+    activity = jobs.snapshot()
+    assert activity is not None and not activity.running
+    assert activity.summary == "Stopped during render."
+    assert activity.problem and "secret detail" not in activity.problem
+
+
+@pytest.mark.parametrize(
+    ("stage", "until"),
+    [
+        (BoardStage.TRANSCRIBE, "transcribe"),
+        (BoardStage.RANK, "rank"),
+        (BoardStage.DRAFT, "draft"),
+    ],
+)
+def test_estimate_prices_the_paid_stage(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, stage: BoardStage, until: str
+) -> None:
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    seen: list[tuple[int, str, str, float]] = []
+
+    def fake_estimate(
+        settings: Settings, source: int, until: str, language: str, budget: Budget
+    ) -> list[str]:
+        seen.append((source, until, language, budget.per_run))
+        return ["line"]
+
+    monkeypatch.setattr("montaj.dashboard_jobs.estimate_run", fake_estimate)
+    assert jobs.estimate(7, stage, 1.5) == ["line"]
+    assert seen == [(7, until, "en", 1.5)]
+    assert jobs.estimate(7, BoardStage.RENDER, None) == []
+    assert len(seen) == 1
+
+
+def test_running_reports_a_new_source_import_as_source_zero(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    importing, finish = Event(), Event()
+
+    def fake_start(settings: Settings, location: str, **_: object) -> int:
+        importing.set()
+        assert finish.wait(timeout=5)
+        return 7
+
+    monkeypatch.setattr("montaj.dashboard_jobs.start_job", fake_start)
+    monkeypatch.setattr(
+        "montaj.dashboard_jobs.produce_batch",
+        Mock(return_value=JobResult(7, 1, ready=[1])),
+    )
+    inbox = jobs.settings.data_dir / "inbox"
+    inbox.mkdir()
+    (inbox / "video.mp4").touch()
+    jobs.submit(
+        Submission(
+            location="video.mp4",
+            campaign=1,
+            niche=Niche.HEALTH,
+            basis="Creator approval",
+            allowed=True,
+        )
+    )
+    try:
+        assert importing.wait(timeout=5)
+        assert jobs.running() == (0, "batch")
+    finally:
+        finish.set()
+        threads[0].join(timeout=5)
+    assert jobs.running() is None
+
+
+def _post_request(
+    settings: Settings,
+    jobs: JobQueue | None,
+    fields: dict[str, object],
+    *,
+    origin: str = "http://127.0.0.1:8765",
+    token: str | None = None,
+) -> Mock:
+    handler = _handler(settings, jobs)
+    request = object.__new__(handler)
+    request.headers = Message()
+    request.headers["Host"] = "127.0.0.1:8765"
+    request.headers["Origin"] = origin
+    request.headers["Content-Type"] = "application/x-www-form-urlencoded"
+    valid = jobs.token if jobs is not None else ""
+    supplied = token if token is not None else valid
+    body = urlencode({"token": supplied, **fields}).encode()
+    request.headers["Content-Length"] = str(len(body))
+    request.path = STAGE_PATH
+    request.rfile = BytesIO(body)
+    request.wfile = BytesIO()
+    request.connection = Mock()
+    request.send_error = Mock()
+    request.send_response = Mock()
+    request.send_header = Mock()
+    request.end_headers = Mock()
+    request.do_POST()
+    return request  # type: ignore[return-value]
+
+
+@pytest.mark.parametrize(
+    ("operations", "origin", "valid_token", "status"),
+    [
+        (False, "http://127.0.0.1:8765", True, 405),
+        (True, "https://other.example", True, 403),
+        (True, "http://127.0.0.1:8765/path", True, 403),
+        (True, "http://127.0.0.1:8765", False, 403),
+        (True, "http://127.0.0.1:8765", True, 303),
+    ],
+)
+def test_stage_post_requires_token_and_same_origin(
+    db_path: Path,
+    operations: bool,
+    origin: str,
+    valid_token: bool,
+    status: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    submit = Mock()
+    monkeypatch.setattr(jobs, "submit_stage", submit)
+    request = _post_request(
+        settings,
+        jobs if operations else None,
+        {"source": 7, "stage": "render"},
+        origin=origin,
+        token=None if valid_token else "wrong",
+    )
+    if status == 303:
+        request.send_response.assert_called_once_with(303)
+        request.send_header.assert_any_call("Location", "/dashboard/sources/7")
+        submit.assert_called_once()
+        assert submit.call_args.args[0] == StageSubmission(
+            source=7, stage=BoardStage.RENDER
+        )
+    else:
+        request.send_error.assert_called_once_with(status)
+        submit.assert_not_called()
+
+
+def test_stage_post_maps_the_form_to_a_submission(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    submit = Mock()
+    monkeypatch.setattr(jobs, "submit_stage", submit)
+    request = _post_request(
+        settings,
+        jobs,
+        {
+            "source": 7,
+            "stage": "rank",
+            "top": 4,
+            "budget": "2.5",
+            "confirm": "yes",
+            "retry": "yes",
+        },
+    )
+    request.send_response.assert_called_once_with(303)
+    assert submit.call_args.args[0] == StageSubmission(
+        source=7,
+        stage=BoardStage.RANK,
+        top=4,
+        budget=2.5,
+        confirm=True,
+        retry=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"source": 7, "stage": "bogus"}, "Choose a valid stage."),
+        ({"source": 7}, "Choose a valid stage."),
+        ({"stage": "render"}, "A valid source ID is required."),
+        ({"source": "abc", "stage": "render"}, "A valid source ID is required."),
+        ({"source": 7, "stage": "render", "top": 0}, "clip target"),
+    ],
+)
+def test_stage_post_rejects_unknown_stage_and_missing_source(
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fields: dict[str, object],
+    message: str,
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    submit = Mock()
+    monkeypatch.setattr(jobs, "submit_stage", submit)
+    request = _post_request(settings, jobs, fields)
+    request.send_response.assert_called_once_with(400)
+    body = request.wfile.getvalue().decode()
+    assert message in body and "Traceback" not in body and "pydantic" not in body
+    submit.assert_not_called()
+
+
+def test_stage_post_shows_a_refused_job_as_a_message(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    refusal = ValueError("Confirm the estimated cost first.")
+    monkeypatch.setattr(jobs, "submit_stage", Mock(side_effect=refusal))
+    request = _post_request(settings, jobs, {"source": 7, "stage": "rank"})
+    request.send_response.assert_called_once_with(400)
+    assert b"Confirm the estimated cost first." in request.wfile.getvalue()

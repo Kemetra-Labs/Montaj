@@ -1,5 +1,6 @@
 """Operate one background production job from the loopback dashboard."""
 
+import logging
 import re
 from dataclasses import dataclass, field, replace
 from html import escape
@@ -7,6 +8,7 @@ from pathlib import Path, PureWindowsPath
 from secrets import compare_digest, token_urlsafe
 from threading import Lock, Thread
 from time import perf_counter
+from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
 from pydantic import BaseModel, Field
@@ -15,11 +17,15 @@ from montaj.budget import Budget
 from montaj.candidates import CANDIDATE_LIMIT
 from montaj.config import Settings
 from montaj.dashboard import render_dashboard_page
-from montaj.db import connect
-from montaj.job import DEFAULT_TARGET, produce_batch, start_job
-from montaj.models import Niche
+from montaj.db import connect, fetch
+from montaj.job import _JOB_ERRORS, DEFAULT_TARGET, produce_batch, start_job
+from montaj.models import Niche, Source
+from montaj.run import estimate_run
+from montaj.stage_jobs import PAID_STAGES, BoardStage, run_board_stage
 
+_LOG = logging.getLogger(__name__)
 JOBS_PATH = "/dashboard/jobs"
+STAGE_PATH = "/dashboard/stage"
 FORM_TYPE = "application/x-www-form-urlencoded"
 _YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
 _VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
@@ -34,6 +40,23 @@ class Submission(BaseModel):
     resume: int | None = Field(default=None, gt=0)
     top: int = Field(default=DEFAULT_TARGET, ge=1, le=CANDIDATE_LIMIT)
     budget: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+class StageSubmission(BaseModel):
+    source: int = Field(gt=0)
+    stage: BoardStage
+    top: int = Field(default=DEFAULT_TARGET, ge=1, le=CANDIDATE_LIMIT)
+    budget: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    confirm: bool = False
+    retry: bool = False
+
+
+# The pipeline stage whose estimate covers each paid board stage.
+_ESTIMATE_UNTIL = {
+    BoardStage.TRANSCRIBE: "transcribe",
+    BoardStage.RANK: "rank",
+    BoardStage.DRAFT: "draft",
+}
 
 
 def dashboard_location(settings: Settings, supplied: str) -> str:
@@ -82,6 +105,8 @@ class Activity:
     target: int = DEFAULT_TARGET
     started: float = field(default_factory=perf_counter)
     finished: float | None = None
+    kind: Literal["batch", "stage"] = "batch"
+    stage_key: str = ""
 
 
 class JobQueue:
@@ -159,17 +184,107 @@ class JobQueue:
                 progress=progress,
             )
         except Exception as exc:
-            with self._lock:
-                activity.summary = f"Stopped during {activity.stage.lower()}."
-                activity.problem = str(exc)
-                activity.running = False
-                activity.finished = perf_counter()
+            self._end(activity, f"Stopped during {activity.stage.lower()}.", str(exc))
         else:
+            self._end(activity, result.summary(), result.stop or "")
+
+    def _end(self, activity: Activity, summary: str, problem: str) -> None:
+        with self._lock:
+            activity.summary = summary
+            activity.problem = problem
+            activity.running = False
+            activity.finished = perf_counter()
+
+    def estimate(
+        self, source_id: int, stage: BoardStage, budget: float | None
+    ) -> list[str]:
+        """Cost lines for a paid stage. A free stage has nothing to estimate."""
+        until = _ESTIMATE_UNTIL.get(stage)
+        if until is None:
+            return []
+        return estimate_run(
+            self.settings,
+            source_id,
+            until,
+            "en",
+            Budget.from_settings(self.settings, budget),
+        )
+
+    def running(self) -> tuple[int, str] | None:
+        """The source and strip key of the running job. Source 0 means an import."""
+        with self._lock:
+            activity = self._activity
+            if activity is None or not activity.running:
+                return None
+            key = activity.stage_key if activity.kind == "stage" else "batch"
+            return (activity.source_id or 0, key)
+
+    def submit_stage(self, submission: StageSubmission) -> None:
+        self._require_permitted(submission.source)
+        budget = Budget.from_settings(self.settings, submission.budget)
+        with self._lock:
+            if self._activity is not None and self._activity.running:
+                raise ValueError("A production job is already running.")
+            if submission.stage in PAID_STAGES and not submission.confirm:
+                raise ValueError("Confirm the estimated cost first.")
+            activity = Activity(
+                "Starting",
+                source_id=submission.source,
+                run_id=budget.run_id,
+                target=submission.top,
+                kind="stage",
+                stage_key=submission.stage.value,
+            )
+            self._activity = activity
+            try:
+                Thread(
+                    target=self._work_stage,
+                    args=(activity, submission, budget),
+                    daemon=True,
+                ).start()
+            except RuntimeError:
+                self._activity = None
+                raise
+
+    def _require_permitted(self, source_id: int) -> None:
+        with connect(self.settings.db_path, read_only=True) as db:
+            source = fetch(db, Source, source_id)
+        if source is None:
+            raise ValueError(f"Source {source_id} was not found.")
+        if not source.source_allowed or not (source.allowed_basis or "").strip():
+            raise ValueError(
+                "Only a source with recorded permission and its basis can run."
+            )
+
+    def _work_stage(
+        self, activity: Activity, submission: StageSubmission, budget: Budget
+    ) -> None:
+        def progress(stage: str) -> None:
             with self._lock:
-                activity.summary = result.summary()
-                activity.problem = result.stop or ""
-                activity.running = False
-                activity.finished = perf_counter()
+                activity.stage = stage
+
+        name = submission.stage.value
+        try:
+            result = run_board_stage(
+                self.settings,
+                submission.source,
+                submission.stage,
+                top=submission.top,
+                budget=budget,
+                progress=progress,
+                retry_failed=submission.retry,
+            )
+        except _JOB_ERRORS as exc:
+            self._end(activity, f"Stopped during {name}.", str(exc))
+        except Exception:
+            _LOG.exception("Stage %s failed for source %s", name, submission.source)
+            self._end(
+                activity,
+                f"Stopped during {name}.",
+                "Unexpected error. Rerun the stage.",
+            )
+        else:
+            self._end(activity, result.summary, result.problem)
 
     def page(self, message: str = "") -> bytes:
         with connect(self.settings.db_path, read_only=True) as db:

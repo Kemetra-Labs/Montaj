@@ -14,13 +14,21 @@ from pydantic import ValidationError
 
 from montaj.config import Settings
 from montaj.dashboard import BASE_PATH, dashboard_response, parse_source_id
-from montaj.dashboard_jobs import FORM_TYPE, JOBS_PATH, JobQueue, Submission
+from montaj.dashboard_jobs import (
+    FORM_TYPE,
+    JOBS_PATH,
+    STAGE_PATH,
+    JobQueue,
+    StageSubmission,
+    Submission,
+)
 from montaj.db import connect, fetch
 from montaj.ingest import source_dir
 from montaj.media import MediaError, source_lock
 from montaj.models import CheckResult, Clip, ClipStatus, Source
 from montaj.rank import clip_words
 from montaj.review import review_decision
+from montaj.stage_jobs import BoardStage
 from montaj.transcribe import Transcript
 
 preview_app = typer.Typer(
@@ -326,6 +334,26 @@ def export_preview(settings: Settings, source_id: int, dest: Path) -> int:
     return len(clips)
 
 
+def _stage_submission(source: int, form: dict[str, str]) -> StageSubmission:
+    try:
+        stage = BoardStage(form.get("stage", ""))
+    except ValueError:
+        raise ValueError("Choose a valid stage.") from None
+    fields = {key: form[key] for key in ("top", "budget") if form.get(key)}
+    try:
+        return StageSubmission.model_validate(
+            {
+                "source": source,
+                "stage": stage,
+                "confirm": form.get("confirm") == "yes",
+                "retry": form.get("retry") == "yes",
+                **fields,
+            }
+        )
+    except ValidationError:
+        raise ValueError("Check the clip target and budget, then try again.") from None
+
+
 def _post_action(
     settings: Settings, jobs: JobQueue, path: str, form: dict[str, str]
 ) -> str:
@@ -339,6 +367,9 @@ def _post_action(
     source = parse_source_id(form.get("source", ""))
     if source is None:
         raise ValueError("A valid source ID is required.")
+    if path == STAGE_PATH:
+        jobs.submit_stage(_stage_submission(source, form))
+        return f"{BASE_PATH}/sources/{source}"
     if path == "/dashboard/review":
         clip = parse_source_id(form.get("clip", ""))
         if clip is None:
@@ -419,6 +450,7 @@ def _handler(
                 return
             if jobs is None or self.path not in {
                 JOBS_PATH,
+                STAGE_PATH,
                 "/dashboard/review",
                 "/dashboard/export",
             }:
