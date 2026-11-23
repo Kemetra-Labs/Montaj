@@ -98,9 +98,12 @@ def _stages_html(row: "BoardRow", ctx: BoardContext) -> str:
     )
 
 
-def live_panel_html(live: LiveJob | None, source_id: int) -> str:
-    """The job panel, shown only for the source the job is working on."""
-    if live is None or live.source_id != source_id:
+def live_panel_html(live: LiveJob | None, source_id: int | None = None) -> str:
+    """The job panel. A source page passes its ID and sees only its own job.
+
+    The board home passes none and sees the current or latest job of any source.
+    """
+    if live is None or (source_id is not None and live.source_id != source_id):
         return ""
     spend = f"${live.spend:.6f}" if live.spend is not None else "unavailable"
     figures = f"<p>Elapsed {live.elapsed_s:.0f} s · Run spend {spend}</p>"
@@ -109,9 +112,14 @@ def live_panel_html(live: LiveJob | None, source_id: int) -> str:
     else:
         heading, body = "Latest job", f"<p>{escape(live.summary)}</p>"
     problem = f"<p>{escape(live.problem)}</p>" if live.problem else ""
+    review = ""
+    if live.source_id is not None and not live.running:
+        review = (
+            f'<p><a href="/?source={live.source_id}&amp;ready=1">Review clips</a></p>'
+        )
     return (
         '<section class="panel job-panel" aria-label="Live job">'
-        f"<h2>{escape(heading)}</h2>{body}{figures}{problem}</section>"
+        f"<h2>{escape(heading)}</h2>{body}{figures}{problem}{review}</section>"
     )
 
 

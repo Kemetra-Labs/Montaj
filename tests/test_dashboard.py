@@ -220,12 +220,12 @@ def test_dashboard_job_progress_is_per_server_and_resume_uses_source_id(
         finish.set()
         threads[0].join(timeout=5)
     assert not threads[0].is_alive()
-    page = jobs.page()
+    page = handle_preview(settings, "/dashboard", jobs)[2]
     assert b"2/2 clips ready" in page and b"/?source=7&amp;ready=1" in page
     restarted.submit(Submission(resume=7, top=2))
     threads[1].join(timeout=5)
     assert not threads[1].is_alive()
-    assert b"2/2 clips ready" in restarted.page()
+    assert b"2/2 clips ready" in handle_preview(settings, "/dashboard", restarted)[2]
 
 
 @pytest.mark.parametrize(
@@ -524,6 +524,7 @@ def _post_request(
     *,
     origin: str = "http://127.0.0.1:8765",
     token: str | None = None,
+    path: str = STAGE_PATH,
 ) -> Mock:
     handler = _handler(settings, jobs)
     request = object.__new__(handler)
@@ -535,7 +536,7 @@ def _post_request(
     supplied = token if token is not None else valid
     body = urlencode({"token": supplied, **fields}).encode()
     request.headers["Content-Length"] = str(len(body))
-    request.path = STAGE_PATH
+    request.path = path
     request.rfile = BytesIO(body)
     request.wfile = BytesIO()
     request.connection = Mock()
@@ -739,7 +740,7 @@ def test_home_top_bar_counts_attention_review_and_spend(db_path: Path) -> None:
     assert "<dt>Needs attention</dt><dd>1</dd>" in idle
     assert "<dt>Clips awaiting review</dt><dd>1</dd>" in idle
     assert "<dt>Est. source API spend</dt><dd>$0.012345</dd>" in idle
-    assert 'href="/dashboard/jobs">New job</a>' in idle
+    assert 'href="#new-job">New job</a>' in idle
     assert "Run spend" not in idle
     running = _home(db_path, running=(7, "render"), run_spend=(0.5, 5.0))
     assert "<dt>Run spend</dt><dd>$0.500000 of $5.00 run ceiling</dd>" in running
@@ -803,7 +804,7 @@ def test_home_refreshes_only_while_running(db_path: Path) -> None:
 def test_empty_board_points_to_new_job(db_path: Path) -> None:
     page = _home(db_path)
     assert "No sources yet" in page
-    assert 'href="/dashboard/jobs">New job</a>' in page
+    assert 'href="#new-job">New job</a>' in page
     assert "<table" not in page
 
 
@@ -1197,3 +1198,168 @@ def test_detail_for_a_source_without_a_basis_still_lists_run_but_the_server_refu
     assert b"Estimate unavailable" in body
     with pytest.raises(ValueError, match="recorded permission"):
         jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
+
+
+def _add_campaign(db_path: Path, name: str = "Spring", campaign_id: int = 3) -> None:
+    with connect(db_path) as db:
+        db.execute(
+            "INSERT INTO campaigns (id, name, platform, rules_json) VALUES (?, ?, 'tiktok', '{}')",
+            (campaign_id, name),
+        )
+
+
+def _board(db_path: Path, jobs: JobQueue | None, target: str = "/dashboard") -> str:
+    settings = Settings(data_dir=db_path.parent)
+    return handle_preview(settings, target, jobs)[2].decode()
+
+
+def test_board_has_new_job_form_with_permission_fields(db_path: Path) -> None:
+    _add_campaign(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    page = _board(db_path, jobs)
+    assert '<details id="new-job" class="panel job-panel">' in page
+    assert 'href="#new-job">New job</a>' in page
+    form = page.split('<form class="job-form" action="/dashboard/jobs"', 1)[1]
+    form = form.split("</form>", 1)[0]
+    assert 'method="post"' in form and f'name="token" value="{jobs.token}"' in form
+    assert 'name="location" maxlength="2048" required' in form
+    assert '<select name="campaign" required><option value="3">Spring</option>' in form
+    assert '<select name="niche" required>' in form
+    assert f'<option value="{Niche.HEALTH.value}">' in form
+    assert 'name="basis" maxlength="200" required' in form
+    assert 'type="checkbox" name="allowed" value="true" required' in form
+    assert "I have permission to use this video" in form
+    assert 'name="top" type="number" min="1" max="' in form and 'value="10"' in form
+    assert 'name="budget" type="number" min="0" step="0.01"' in form
+    assert "Resume a source" not in page
+
+
+def test_new_job_form_escapes_campaign_names(db_path: Path) -> None:
+    _add_campaign(db_path, "<img src=x onerror=alert(1)>")
+    page = _board(db_path, JobQueue(Settings(data_dir=db_path.parent)))
+    assert "&lt;img src=x onerror=alert(1)&gt;" in page and "<img" not in page
+
+
+def test_new_job_panel_without_campaigns_explains_how_to_add_one(
+    db_path: Path,
+) -> None:
+    page = _board(db_path, JobQueue(Settings(data_dir=db_path.parent)))
+    assert "montaj campaign add" in page and 'name="location"' not in page
+
+
+def test_new_job_form_is_absent_on_a_read_only_server(db_path: Path) -> None:
+    _add_campaign(db_path)
+    page = _board(db_path, None)
+    assert "new-job" not in page and "<form" not in page and "Start job" not in page
+
+
+def test_new_job_form_is_replaced_while_a_job_runs(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_campaign(db_path)
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    started, finish = Event(), Event()
+
+    def blocked_stage(*_: object, **__: object) -> StageResult:
+        started.set()
+        assert finish.wait(timeout=5)
+        return StageResult("Done.")
+
+    monkeypatch.setattr("montaj.dashboard_jobs.run_board_stage", blocked_stage)
+    jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
+    try:
+        assert started.wait(timeout=5)
+        page = _board(db_path, jobs)
+    finally:
+        finish.set()
+        threads[0].join(timeout=5)
+    assert "The worker is preparing a batch." in page
+    assert 'name="location"' not in page and "Start job" not in page
+    assert "Running:" in page and "Live job" in page
+
+
+def test_board_shows_the_latest_finished_job_with_a_review_link(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    monkeypatch.setattr(
+        "montaj.dashboard_jobs.run_board_stage", lambda *a, **k: StageResult("<Done>")
+    )
+    jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
+    threads[0].join(timeout=5)
+    page = _board(db_path, jobs)
+    assert "Latest job" in page and "&lt;Done&gt;" in page and "<Done>" not in page
+    assert 'href="/?source=7&amp;ready=1">Review clips</a>' in page
+    assert "Latest job" not in _board(db_path, None)
+
+
+def test_jobs_path_serves_the_board(db_path: Path) -> None:
+    _add_campaign(db_path)
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    board = handle_preview(settings, "/dashboard?notice=Hello", jobs)
+    served = handle_preview(settings, f"{JOBS_PATH}?notice=Hello", jobs)
+    assert served[0] == 200 and served[1].startswith("text/html")
+    assert served == board
+    page = served[2].decode()
+    assert "Production board" in page and "Hello" in page
+    assert "Production jobs" not in page
+
+
+def test_new_job_error_rerenders_board_with_notice(db_path: Path) -> None:
+    _add_campaign(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    fields = {
+        "location": "https://example.com/video",
+        "campaign": 3,
+        "niche": "health",
+        "basis": "Creator approval",
+        "allowed": "true",
+    }
+    request = _post_request(settings, jobs, fields, path=JOBS_PATH)
+    request.send_response.assert_called_once_with(400)
+    page = request.wfile.getvalue().decode()
+    message = "Enter an individual YouTube video URL or use the inbox."
+    assert f'<p class="notice" role="status">{message}</p>' in page
+    assert '<details id="new-job" class="panel job-panel" open>' in page
+    assert "Production board" in page and "Traceback" not in page
+    assert jobs.snapshot() is None
+
+
+def test_new_job_notice_is_escaped(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    refusal = ValueError("<script>alert(1)</script>")
+    monkeypatch.setattr(jobs, "submit", Mock(side_effect=refusal))
+    request = _post_request(settings, jobs, {"resume": 1}, path=JOBS_PATH)
+    page = request.wfile.getvalue().decode()
+    assert "&lt;script&gt;" in page and "<script>" not in page
+
+
+def test_valid_job_post_redirects_to_the_board(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    monkeypatch.setattr(jobs, "submit", Mock())
+    request = _post_request(settings, jobs, {"resume": 1}, path=JOBS_PATH)
+    request.send_response.assert_called_once_with(303)
+    request.send_header.assert_any_call("Location", "/dashboard")
+
+
+def test_nav_no_longer_links_production_jobs(db_path: Path) -> None:
+    _add_campaign(db_path)
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    for target in ("/dashboard", "/dashboard/sources/7", "/dashboard?view=attention"):
+        page = handle_preview(settings, target, jobs)[2].decode()
+        assert "Production jobs" not in page and 'href="/dashboard/jobs"' not in page

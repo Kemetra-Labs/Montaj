@@ -299,6 +299,25 @@ def _confirm_response(
     return 200, html_type, page
 
 
+def _board_response(
+    settings: Settings, jobs: JobQueue | None, path: str, view: str, notice: str
+) -> tuple[int, str, bytes]:
+    """A dashboard page with the live job state when this server runs operations."""
+    if jobs is None:
+        return dashboard_response(settings, path, view)
+    return dashboard_response(
+        settings,
+        path,
+        view,
+        operations=True,
+        running=jobs.running(),
+        token=jobs.token,
+        notice=notice,
+        run_spend=jobs.run_spend(),
+        live=jobs.live_job(),
+    )
+
+
 def handle_preview(
     settings: Settings, target: str, jobs: JobQueue | None = None
 ) -> tuple[int, str, bytes]:
@@ -307,26 +326,14 @@ def handle_preview(
     path = request.path
     query = parse_qs(request.query, keep_blank_values=True)
     content_type = "text/html; charset=utf-8"
-    if jobs is not None and path == JOBS_PATH:
-        return 200, content_type, jobs.page(query.get("notice", [""])[0])
+    if path == JOBS_PATH:  # the retired jobs page: jobs start on the board
+        path = BASE_PATH
     confirm_id = confirm_source_id(path)
     if confirm_id is not None:
         return _confirm_response(settings, jobs, confirm_id, query)
     if path == BASE_PATH or path.startswith(f"{BASE_PATH}/"):
         view = query.get("view", [""])[0]
-        if jobs is None:
-            return dashboard_response(settings, path, view)
-        return dashboard_response(
-            settings,
-            path,
-            view,
-            operations=True,
-            running=jobs.running(),
-            token=jobs.token,
-            notice=query.get("notice", [""])[0],
-            run_spend=jobs.run_spend(),
-            live=jobs.live_job(),
-        )
+        return _board_response(settings, jobs, path, view, query.get("notice", [""])[0])
     if path in {"", "/"}:
         source_id = parse_source_id(query["source"][0]) if "source" in query else None
         if "source" in query and source_id is None:
@@ -412,7 +419,7 @@ def _post_action(
                 {key: value for key, value in form.items() if value}
             )
         )
-        return JOBS_PATH
+        return BASE_PATH
     source = parse_source_id(form.get("source", ""))
     if source is None:
         raise ValueError("A valid source ID is required.")
@@ -539,7 +546,10 @@ def _handler(
                 RuntimeError,
             ) as exc:
                 if self.path == JOBS_PATH:
-                    self._respond(400, "text/html; charset=utf-8", jobs.page(str(exc)))
+                    status, content_type, body = _board_response(
+                        settings, jobs, BASE_PATH, "", str(exc)
+                    )
+                    self._respond(400 if status == 200 else status, content_type, body)
                 else:
                     self._respond(
                         400,

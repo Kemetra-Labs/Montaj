@@ -12,10 +12,12 @@ from pydantic import ValidationError
 from montaj.budget import Budget
 from montaj.config import Settings
 from montaj.costs import cost_totals
-from montaj.dashboard_detail import render_detail
+from montaj.dashboard_detail import live_panel_html, render_detail
+from montaj.dashboard_new_job import new_job_html
 from montaj.dashboard_parts import (
     BASE_PATH,
     JOBS_LINK,
+    NEW_JOB_LINK,
     STATE_LABELS,
     BoardContext,
     LiveJob,
@@ -243,7 +245,7 @@ def _empty_html(has_sources: bool, ctx: BoardContext) -> str:
     if has_sources:
         return '<div class="empty"><h2>No sources match this view</h2><a href="/dashboard">Show all sources</a></div>'
     start = (
-        f'Start with <a href="{JOBS_LINK}">New job</a> or import'
+        f'Start with <a href="{NEW_JOB_LINK}">New job</a> or import'
         if ctx.operations
         else "Import"
     )
@@ -300,7 +302,7 @@ def _overview(
         else _empty_html(bool(board), ctx)
     )
     new_job = (
-        f'<a class="button primary" href="{JOBS_LINK}">New job</a>'
+        f'<a class="button primary" href="{NEW_JOB_LINK}">New job</a>'
         if ctx.operations
         else ""
     )
@@ -315,7 +317,7 @@ def _overview(
     return render_dashboard_page(
         "Operations",
         f"""<div class="heading"><h1>Production board</h1><div class="toolbar">{new_job}<a class="button" href="/dashboard?view={view}">Refresh</a></div></div>
-{notice}{topbar}
+{notice}{live_panel_html(ctx.live)}{new_job_html(ctx)}{topbar}
 <div class="board">
 <section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Source queue</h2>
 <nav class="filters" aria-label="Filter sources">{filters}</nav></div>{results}</section>
@@ -327,6 +329,12 @@ def _overview(
         'aria-current="page"',
         refresh=ctx.running is not None,
     )
+
+
+def _campaign_choices(settings: Settings) -> tuple[tuple[int, str], ...]:
+    with connect(settings.db_path, read_only=True) as db:
+        rows = db.execute("SELECT id, name FROM campaigns ORDER BY name").fetchall()
+    return tuple((int(row[0]), str(row[1])) for row in rows)
 
 
 def _campaign_name(settings: Settings, source_id: int) -> str:
@@ -383,12 +391,15 @@ def dashboard_response(
             return not_found_response()
     board: list[BoardRow] = []
     campaign = ""
+    choices: tuple[tuple[int, str], ...] = ()
     try:
         from montaj.board import build_rows  # board imports this module
 
         board = build_rows(settings, running=running, source_id=source_id)
         if source_id is not None:
             campaign = _campaign_name(settings, source_id)
+        elif operations:
+            choices = _campaign_choices(settings)
     except (sqlite3.Error, OSError, ValidationError, ValueError):
         return (
             503,
@@ -400,7 +411,15 @@ def dashboard_response(
         )
     ceiling = Budget.from_settings(settings, None).per_source
     context = BoardContext(
-        operations, running, token, notice, run_spend, live, campaign, ceiling
+        operations,
+        running,
+        token,
+        notice,
+        run_spend,
+        live,
+        campaign,
+        ceiling,
+        choices,
     )
     if source_id is None:
         return 200, html, _overview(settings, board, view, context)

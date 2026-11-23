@@ -47,6 +47,7 @@ code { font-size: .9em; color: var(--ink); }
 .primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
 .primary:hover { background: oklch(93% .12 126); }
 .job-panel { display: grid; gap: .8rem; margin-block: 1rem; padding: 1rem; }
+.job-panel > summary { cursor: pointer; font-weight: 670; }
 .job-form { display: grid; gap: .7rem; justify-items: start; }
 .job-form label { display: grid; gap: .2rem; }
 .job-form .inline-field { display: flex; align-items: center; gap: .4rem; }

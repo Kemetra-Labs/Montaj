@@ -6,6 +6,7 @@ from html import escape
 BASE_PATH = "/dashboard"
 STAGE_PATH = f"{BASE_PATH}/stage"
 JOBS_LINK = f"{BASE_PATH}/jobs"
+NEW_JOB_LINK = "#new-job"
 _REFRESH_SECONDS = 3
 STATE_LABELS = {
     "done": "Done",
@@ -60,6 +61,7 @@ class BoardContext:
     live: LiveJob | None = None
     campaign: str = ""
     source_ceiling: float = 0.0
+    campaign_choices: tuple[tuple[int, str], ...] = ()
 
 
 def hidden(**fields: str | int) -> str:
