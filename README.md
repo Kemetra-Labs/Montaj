@@ -112,6 +112,7 @@ Run commands as `uv run montaj ...`.
 | `MONTAJ_DEEPGRAM_MODEL` | Transcription model | `nova-3` |
 | `MONTAJ_DEEPGRAM_DIARIZE` | Request and budget for optional speaker labels | `false` |
 | `MONTAJ_CLAUDE_MODEL` | Claude model | `claude-sonnet-5-5` |
+| `MONTAJ_RANK_MODEL` | Claude model for the rank stage only | `claude-haiku-5-5` |
 | `MONTAJ_MAX_COST_PER_RUN_USD` | Spending ceiling for one run | `0.50` |
 | `MONTAJ_MAX_COST_PER_SOURCE_USD` | Spending ceiling for one source | `2.00` |
 | `MONTAJ_MAX_SOURCE_MINUTES` | Longest source accepted at ingest | `120` |

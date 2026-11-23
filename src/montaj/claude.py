@@ -40,8 +40,10 @@ class Claude:
         max_tokens: int = 2200,
         require_complete: bool = False,
         thinking: Literal["between_tools"] | None = None,
+        model: str | None = None,
     ) -> None:
         self.settings = settings
+        self.model = model or settings.claude_model
         self.source_id = source_id
         self.stage = stage
         self.budget = budget
@@ -51,7 +53,7 @@ class Claude:
 
     def _request(self, prompt: str, key: str) -> CallResult[Completion]:
         payload: dict[str, object] = {
-            "model": self.settings.claude_model,
+            "model": self.model,
             "max_tokens": self.max_tokens,
             "messages": [{"role": "user", "content": prompt}],
         }
@@ -98,7 +100,7 @@ class Claude:
             self.source_id,
             self.stage,
             Service.CLAUDE,
-            self.settings.claude_model,
+            self.model,
             self.budget,
         )
 

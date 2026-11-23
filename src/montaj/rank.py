@@ -301,7 +301,7 @@ def rank_source(
             campaign_rules,
             eligible,
             rejected,
-            settings.claude_model,
+            settings.rank_model,
             "rank-v1",
             *(
                 [brief, candidates.input_hash]
@@ -372,8 +372,9 @@ def rank_source(
                         max_tokens=_RANK_MAX_TOKENS,
                         require_complete=True,
                         thinking="between_tools"
-                        if settings.claude_model == "claude-sonnet-5-5"
+                        if settings.rank_model == "claude-sonnet-5-5"
                         else None,
+                        model=settings.rank_model,
                     ),
                     prompt,
                     lambda response: _decode_grades(response, ids),

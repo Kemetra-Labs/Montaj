@@ -36,9 +36,15 @@ def estimate_cost(
             if usage.diarization:
                 per_minute += float(rates["diarization_usd_per_minute"])
             return (usage.seconds or 0) * per_minute / 60
+        input_rate = float(rates["usd_per_million_input_tokens"])
+        output_rate = float(rates["usd_per_million_output_tokens"])
+        threshold = rates.get("long_prompt_threshold_tokens")
+        if threshold is not None and (usage.input_tokens or 0) > int(threshold):
+            input_rate = float(rates["usd_per_million_input_tokens_long"])
+            output_rate = float(rates["usd_per_million_output_tokens_long"])
         return (
-            (usage.input_tokens or 0) * float(rates["usd_per_million_input_tokens"])
-            + (usage.output_tokens or 0) * float(rates["usd_per_million_output_tokens"])
+            (usage.input_tokens or 0) * input_rate
+            + (usage.output_tokens or 0) * output_rate
         ) / 1_000_000
     except KeyError as exc:
         raise ValueError(
