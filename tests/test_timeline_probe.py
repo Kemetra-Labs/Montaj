@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from scripts.timeline_probe import Handoff, write_timeline
+from scripts.timeline_probe import main as timeline_main
 
 
 def clip(**overrides):
@@ -78,3 +79,23 @@ def test_missing_media_fails_before_writing(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Missing media"):
         write_timeline(Handoff(fps=12, clips=[clip()]), output)
     assert not output.exists()
+
+
+def test_timeline_cli_rejects_an_output_outside_its_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    manifest = workspace / "manifest.json"
+    manifest.write_text(
+        Handoff(fps=12, clips=[clip()]).model_dump_json(), encoding="utf-8"
+    )
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(
+        "sys.argv", ["timeline_probe", "manifest.json", "../review.otio"]
+    )
+    with pytest.raises(SystemExit) as exc:
+        timeline_main()
+    assert exc.value.code == 1
+    assert "inside the working directory" in capsys.readouterr().err
+    assert not (tmp_path / "review.otio").exists()

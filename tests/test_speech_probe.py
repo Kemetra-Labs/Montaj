@@ -4,6 +4,7 @@ import pytest
 
 from montaj.transcribe import Word
 from scripts.speech_probe import Span, score_activity, score_words
+from scripts.speech_probe import main as speech_main
 from scripts.synthetic_speech_benchmark import _faster_whisper
 
 
@@ -57,3 +58,20 @@ def test_spans_reject_reversed_and_unlabeled_diarization() -> None:
 def test_faster_whisper_requires_an_offline_tokenizer(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"local tokenizer\.json"):
         _faster_whisper(tmp_path)
+
+
+def test_speech_cli_rejects_a_reference_outside_its_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (tmp_path / "reference.json").write_text("[]", encoding="utf-8")
+    (workspace / "hypothesis.json").write_text("[]", encoding="utf-8")
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(
+        "sys.argv", ["speech_probe", "vad", "../reference.json", "hypothesis.json"]
+    )
+    with pytest.raises(SystemExit) as exc:
+        speech_main()
+    assert exc.value.code == 1
+    assert "inside the working directory" in capsys.readouterr().err

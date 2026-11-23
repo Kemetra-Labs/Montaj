@@ -12,6 +12,7 @@ from typing import Self
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 from montaj.transcribe import Transcript, Word
+from scripts.pilot_paths import workspace_path
 
 TOKEN = re.compile(r"[^\W_]+(?:'[^\W_]+)*")
 BOUNDARY_TOLERANCE = 0.25
@@ -225,9 +226,13 @@ def main() -> None:
     parser.add_argument("hypothesis", type=Path)
     args = parser.parse_args()
     try:
+        reference_path = workspace_path(args.reference)
+        hypothesis_path = workspace_path(args.hypothesis)
+        if not reference_path.is_file() or not hypothesis_path.is_file():
+            raise ValueError("Reference and hypothesis must be existing JSON files.")
         reference, hypothesis = (
-            args.reference.read_bytes(),
-            args.hypothesis.read_bytes(),
+            reference_path.read_bytes(),
+            hypothesis_path.read_bytes(),
         )
         if args.mode == "words":
             scores = score_words(

@@ -7,6 +7,8 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from scripts.pilot_paths import workspace_path
+
 
 class HandoffClip(BaseModel):
     clip_id: int = Field(gt=0, strict=True)
@@ -61,7 +63,10 @@ class Handoff(BaseModel):
 def write_timeline(handoff: Handoff, output: Path) -> None:
     if output.suffix != ".otio":
         raise ValueError("Use an .otio output file.")
-    root = output.parent.resolve()
+    output = output.resolve()
+    root = output.parent
+    if not root.is_dir():
+        raise ValueError("The timeline output folder must already exist.")
     for clip in handoff.clips:
         media = (root / clip.path).resolve()
         if not media.is_relative_to(root):
@@ -112,9 +117,11 @@ def main() -> None:
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
     try:
-        write_timeline(
-            Handoff.model_validate_json(args.manifest.read_bytes()), args.output
-        )
+        manifest = workspace_path(args.manifest)
+        output = workspace_path(args.output)
+        if not manifest.is_file():
+            raise ValueError("The handoff manifest must be an existing JSON file.")
+        write_timeline(Handoff.model_validate_json(manifest.read_bytes()), output)
     except (OSError, ValueError) as exc:
         parser.exit(1, f"Timeline probe failed: {exc}\n")
 

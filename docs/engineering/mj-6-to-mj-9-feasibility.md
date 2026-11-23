@@ -30,7 +30,7 @@ python -m scripts.synthetic_speech_benchmark silero <silero_vad.onnx> --scratch 
 
 Model fingerprints used here are SHA-256 `1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a` for the CTranslate2 `model.bin`, the upstream SHA-1 `3fb92ec865cbbc769f08137f22470d6b66e071b6` for the GGML file, and SHA-256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3` for Silero.
 
-To score independently aligned artifacts, use `python -m scripts.speech_probe {words,vad,diarization} REFERENCE.json HYPOTHESIS.json`. In `words` mode the inputs use Montaj's transcript schema and timestamps start at the excerpt origin. Activity inputs are JSON lists of `{"start": 0.0, "end": 1.0}` spans. Diarization adds integer `speaker` IDs and requires two reference speakers. It scores speaker time with label permutation and overlapping speech, plus matched and unmatched per-speaker turn boundaries.
+To score independently aligned artifacts, use `python -m scripts.speech_probe {words,vad,diarization} REFERENCE.json HYPOTHESIS.json`. Keep both JSON files inside the working directory. In `words` mode the inputs use Montaj's transcript schema and timestamps start at the excerpt origin. Activity inputs are JSON lists of `{"start": 0.0, "end": 1.0}` spans. Diarization adds integer `speaker` IDs and requires two reference speakers. It scores speaker time with label permutation and overlapping speech, plus matched and unmatched per-speaker turn boundaries.
 
 ## MJ-7 · Diarization and forced alignment
 
@@ -58,7 +58,7 @@ Review this decision if the operator repeatedly loses the ability to resume or r
 
 **Defer product export.** The pilot target is DaVinci Resolve. The concrete workflow to validate is handing approved, already-captioned renders to an editor for sequencing and audio polish. Demand for that workflow is unconfirmed while [MJ-2](https://rahmaqanater.atlassian.net/browse/MJ-2) is open. Blackmagic documents native `.otio` import and relinking, so this pilot uses the regular OpenTimelineIO JSON adapter and relative media references. The adapter round-trip was tested on Windows. Resolve import and relinking still need an editor session. [DaVinci Resolve manual](https://documents.blackmagicdesign.com/UserManuals/DaVinci_Resolve_19_Reference_Manual.pdf) · [OpenTimelineIO documentation](https://opentimelineio.readthedocs.io/en/latest/).
 
-Install `opentimelineio==0.18.1` in a disposable environment. Run `python -m scripts.timeline_probe MANIFEST.json OUTPUT.otio`. The sample manifest below uses two copies of the checked-in 216-frame, 12 fps video fixture. Place those copies beside the output in `media/`. The input describes rendered media ranges in integer frames with an exclusive out point and retains the source and clip IDs as metadata.
+Install `opentimelineio==0.18.1` in a disposable environment. Run `python -m scripts.timeline_probe MANIFEST.json OUTPUT.otio`. Keep the manifest and timeline output inside the working directory. The sample manifest below uses two copies of the checked-in 216-frame, 12 fps video fixture. Place those copies beside the output in `media/`. The input describes rendered media ranges in integer frames with an exclusive out point and retains the source and clip IDs as metadata.
 
 ```json
 {
