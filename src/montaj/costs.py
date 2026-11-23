@@ -73,10 +73,17 @@ def log_api_call(
 
 
 @dataclass(slots=True)
+class AttemptTotals:
+    count: int = 0
+    estimate: float = 0.0
+
+
+@dataclass(slots=True)
 class CostTotals:
     by_stage: dict[str, float] = field(default_factory=dict)
     by_source: dict[int, float] = field(default_factory=dict)
     approved_clips: int = 0
+    by_outcome: dict[str, AttemptTotals] = field(default_factory=dict)
 
     @property
     def total(self) -> float:
@@ -86,16 +93,19 @@ class CostTotals:
 def cost_totals(db: sqlite3.Connection, source_id: int | None = None) -> CostTotals:
     summary = CostTotals()
     rows = db.execute(
-        """SELECT source_id, stage, SUM(estimated_cost_usd) AS total FROM api_calls
-           WHERE (? IS NULL OR source_id = ?) GROUP BY source_id, stage
-           ORDER BY source_id, stage""",
+        """SELECT source_id, stage, outcome, COUNT(*), SUM(estimated_cost_usd)
+           FROM api_calls WHERE (? IS NULL OR source_id = ?)
+           GROUP BY source_id, stage, outcome ORDER BY source_id, stage, outcome""",
         (source_id, source_id),
     )
     for row in rows:
-        source, stage, total = row
+        source, stage, outcome, count, total = row
         if source is not None:
             summary.by_source[source] = summary.by_source.get(source, 0) + total
         summary.by_stage[stage] = summary.by_stage.get(stage, 0) + total
+        attempts = summary.by_outcome.setdefault(outcome, AttemptTotals())
+        attempts.count += count
+        attempts.estimate += total
     approved = db.execute(
         """SELECT COUNT(*) FROM clips WHERE (? IS NULL OR source_id = ?)
            AND status IN ('approved', 'exported', 'posted')""",

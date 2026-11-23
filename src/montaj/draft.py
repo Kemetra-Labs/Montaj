@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from montaj.budget import Budget, BudgetExceeded, BudgetOverride
 from montaj.candidates import parse_json_output
 from montaj.captions import source_inputs
-from montaj.claude import LLM, Claude
+from montaj.claude import LLM, Claude, complete_checked
 from montaj.config import Settings
 from montaj.cut import selected_clips
 from montaj.db import connect, fetch, save_clip
@@ -96,14 +96,15 @@ def style_notes(niche: Niche, account_notes: list[str]) -> str:
 
 
 def _request_draft(client: LLM, prompt: str) -> DraftResult:
+    def decode(response: str) -> DraftResult:
+        return DraftResult.model_validate_json(parse_json_output(response))
+
     follow_up = (
         prompt + "\nReturn only the JSON object. Each hook must be 12 words or fewer."
     )
     for request in (prompt, follow_up):
         try:
-            return DraftResult.model_validate_json(
-                parse_json_output(client.complete(request))
-            )
+            return complete_checked(client, request, decode)
         except ValidationError:
             continue
     raise ValueError("Claude returned an invalid draft twice.")

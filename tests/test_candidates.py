@@ -1,4 +1,9 @@
 import json
+from io import BytesIO
+from urllib.request import Request
+
+import pytest
+from pydantic import SecretStr
 
 from montaj.budget import Budget
 from montaj.candidates import (
@@ -11,10 +16,55 @@ from montaj.candidates import (
     windows,
 )
 from montaj.config import Settings
+from montaj.costs import cost_totals
 from montaj.db import connect, fetch
+from montaj.external import ExternalCallError
 from montaj.models import Clip, ClipStatus
 from montaj.transcribe import Transcript, Word
 from tests.fakes import FakeLLM
+
+
+def test_truncated_candidate_completion_does_not_repeat_the_paid_request(
+    prepared_source: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = prepared_source.data_dir / "sources/1"
+    transcript = Transcript(
+        text="A fixture",
+        language="en",
+        words=[Word(text="word", start=t, end=t + 0.5) for t in range(35)],
+    )
+    (directory / "transcript.json").write_text(
+        transcript.model_dump_json(), encoding="utf-8"
+    )
+    settings = prepared_source.model_copy(
+        update={"anthropic_api_key": SecretStr("offline-fake")}
+    )
+    requests = []
+
+    def send(request: Request, *, timeout: int) -> BytesIO:
+        requests.append(request.data)
+        return BytesIO(
+            json.dumps(
+                {
+                    "content": [{"type": "text", "text": '[{"start":'}],
+                    "stop_reason": "max_tokens",
+                    "usage": {"input_tokens": 1000, "output_tokens": 2200},
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr("montaj.claude.urlopen", send)
+    with pytest.raises((ExternalCallError, ValueError)) as error:
+        find_candidates(settings, 1, bounds=CandidateBounds(), budget=Budget(1, 1))
+
+    with connect(settings.db_path) as db:
+        totals = cost_totals(db, 1)
+    assert (len(requests), totals.total) == (1, pytest.approx(0.024))
+    assert isinstance(error.value, ExternalCallError)
+    assert "truncated at 2200 tokens" in str(error.value)
+    assert not (directory / "candidates.json").exists()
+    assert not list((directory / ".candidate-windows").rglob("*.json"))
+    assert totals.by_outcome["failure"].count == 1
 
 
 def _pick(start: float, end: float) -> Pick:

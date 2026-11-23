@@ -25,6 +25,15 @@ class ExternalCallError(RuntimeError):
         self.http_status = http_status
 
 
+class RejectedResponse(Exception):
+    """A received response failed validation and has provider-reported usage."""
+
+    def __init__(self, usage: Usage, error: ValueError | ExternalCallError) -> None:
+        super().__init__("Provider response failed validation.")
+        self.usage = usage
+        self.error = error
+
+
 @dataclass(frozen=True, slots=True)
 class CallContext:
     db_path: Path
@@ -171,6 +180,15 @@ def call_external[T](
         call_id = _reserve(context, estimated_usage, estimate)
         try:
             result = fn()
+        except RejectedResponse as exc:
+            _settle(
+                context,
+                call_id,
+                exc.usage,
+                estimate_cost(context.service, context.model, exc.usage),
+                "failure",
+            )
+            raise exc.error from None
         except Exception as exc:
             failure = _classify(exc)
         else:

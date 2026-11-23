@@ -10,7 +10,7 @@ from montaj.candidates import candidates
 from montaj.captions import captions
 from montaj.check import check as check_clips
 from montaj.config import Settings
-from montaj.costs import cost_totals
+from montaj.costs import AttemptTotals, cost_totals
 from montaj.cut import cut
 from montaj.db import SchemaVersionError, connect, init_db
 from montaj.doctor import Check, checks, online_checks
@@ -112,7 +112,7 @@ def show_costs(source: int | None = typer.Option(None, min=1)) -> None:
         typer.echo("Database is missing. Run montaj db init first.", err=True)
         raise typer.Exit(1)
     try:
-        with connect(path) as db:
+        with connect(path, read_only=True) as db:
             totals = cost_totals(db, source)
     except sqlite3.Error as exc:
         typer.echo(f"Could not read costs: {exc}", err=True)
@@ -122,6 +122,14 @@ def show_costs(source: int | None = typer.Option(None, min=1)) -> None:
     for source_id, amount in totals.by_source.items():
         typer.echo(f"Source {source_id}: ${amount:.6f}")
     typer.echo(f"Estimated total: ${totals.total:.6f}")
+    for outcome, label in (
+        ("success", "Successful calls"),
+        ("failure", "Failed attempts"),
+        ("reserved", "Unsettled reservations"),
+    ):
+        attempts = totals.by_outcome.get(outcome, AttemptTotals())
+        typer.echo(f"{label}: {attempts.count} (${attempts.estimate:.6f} estimated)")
+    typer.echo("Cached work creates no API attempt. See stage output for reuse.")
     if totals.approved_clips:
         typer.echo(f"Per approved clip: ${totals.total / totals.approved_clips:.6f}")
 
