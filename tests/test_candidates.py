@@ -48,7 +48,7 @@ def test_truncated_candidate_completion_does_not_repeat_the_paid_request(
                 {
                     "content": [{"type": "text", "text": '[{"start":'}],
                     "stop_reason": "max_tokens",
-                    "usage": {"input_tokens": 1000, "output_tokens": 2200},
+                    "usage": {"input_tokens": 1000, "output_tokens": 4096},
                 }
             ).encode()
         )
@@ -59,9 +59,9 @@ def test_truncated_candidate_completion_does_not_repeat_the_paid_request(
 
     with connect(settings.db_path) as db:
         totals = cost_totals(db, 1)
-    assert (len(requests), totals.total) == (1, pytest.approx(0.024))
+    assert (len(requests), totals.total) == (1, pytest.approx(0.04296))
     assert isinstance(error.value, ExternalCallError)
-    assert "truncated at 2200 tokens" in str(error.value)
+    assert "truncated at 4096 tokens" in str(error.value)
     assert not (directory / "candidates.json").exists()
     assert not list((directory / ".candidate-windows").rglob("*.json"))
     assert totals.by_outcome["failure"].count == 1
