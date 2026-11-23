@@ -17,7 +17,7 @@ from pydantic import AliasChoices, BaseModel, Field, ValidationError, model_vali
 
 from montaj.budget import Budget, BudgetExceeded, BudgetOverride
 from montaj.config import Settings
-from montaj.costs import Service, Usage
+from montaj.costs import Service, Usage, deepgram_billing_model
 from montaj.db import connect, fetch, save_source
 from montaj.external import CallContext, CallResult, ExternalCallError, call_external
 from montaj.ingest import load_source
@@ -73,7 +73,7 @@ class DeepgramTranscriber:
                 "model": self.settings.deepgram_model,
                 "language": self.language,
                 "smart_format": "true",
-                "diarize": "true",
+                "diarize": str(self.settings.deepgram_diarize).lower(),
             }
         )
         with path.open("rb") as audio:
@@ -99,28 +99,29 @@ class DeepgramTranscriber:
             }
         )
         seconds = payload.get("metadata", {}).get("duration", duration)
-        return CallResult(transcript, Usage(seconds=seconds))
+        return CallResult(
+            transcript,
+            Usage(seconds=seconds, diarization=self.settings.deepgram_diarize),
+        )
 
     def transcribe(self, audio_path: Path) -> Transcript:
         key = self.settings.deepgram_api_key
         if key is None:
             raise ValueError("Set DEEPGRAM_API_KEY before requesting a new transcript.")
         duration = audio_duration(audio_path)
-        model = self.settings.deepgram_model
-        billing_model = f"{model}-multilingual" if self.language == "multi" else model
         context = CallContext(
             self.settings.db_path,
             self.source_id,
             "transcribe",
             Service.DEEPGRAM,
-            billing_model,
+            deepgram_billing_model(self.settings.deepgram_model, self.language),
             self.budget,
         )
         if duration > CHUNK_SECONDS:
             context = replace(context, nonretryable_http=(504,))
         return call_external(
             context,
-            Usage(seconds=duration),
+            Usage(seconds=duration, diarization=self.settings.deepgram_diarize),
             lambda: self._request(audio_path, key.get_secret_value(), duration),
             policy=self.settings.retry,
         )
@@ -308,6 +309,27 @@ def _transcribe_chunks(
     return _join(parts, language)
 
 
+def transcript_input_hashes(
+    settings: Settings, audio: Path, language: str
+) -> tuple[str, str]:
+    audio_hash = file_hash(audio)
+    legacy = input_hash(
+        audio_hash, settings.deepgram_model, language, "diarize-smart-format-v1"
+    )
+    if settings.deepgram_diarize:
+        return legacy, legacy
+    return input_hash(
+        audio_hash, settings.deepgram_model, language, "smart-format-v1"
+    ), legacy
+
+
+def cached_transcript(directory: Path, keys: tuple[str, str]) -> Transcript | None:
+    transcript = _read_cached(directory / "transcript.json")
+    if transcript is not None and transcript.input_hash in keys:
+        return transcript
+    return None
+
+
 def transcribe_source(
     settings: Settings,
     source_id: int,
@@ -324,16 +346,10 @@ def transcribe_source(
     split_marker = directory / "transcript.split"
     client = backend or DeepgramTranscriber(settings, source_id, language, budget)
     with source_lock(directory, command="transcribe", wait=wait):
-        # Nova-3 supports en and Egyptian Arabic ar-EG with word timestamps.
-        # https://developers.deepgram.com/changelog/2026/1/27
-        key = input_hash(
-            file_hash(audio),
-            settings.deepgram_model,
-            language,
-            "diarize-smart-format-v1",
-        )
-        cached = _read_cached(output)
-        if cached is not None and cached.input_hash == key:
+        keys = transcript_input_hashes(settings, audio, language)
+        key = keys[0]
+        cached = cached_transcript(directory, keys)
+        if cached is not None:
             transcript, reused = cached, True
         else:
             if audio.stat().st_size >= MAX_REQUEST_BYTES or (

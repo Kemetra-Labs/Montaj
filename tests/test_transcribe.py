@@ -12,15 +12,21 @@ from montaj.budget import Budget
 from montaj.cli import app
 from montaj.config import Settings
 from montaj.db import connect
+from montaj.media import file_hash
+from montaj.pipeline import input_hash
 from montaj.transcribe import Transcript, Word, transcribe_source
 
 module = importlib.import_module("montaj.transcribe")
 
 
+@pytest.mark.parametrize("diarize", [False, True])
 def test_deepgram_words_query_and_cache(
-    prepared_source: Settings, monkeypatch: pytest.MonkeyPatch
+    prepared_source: Settings, monkeypatch: pytest.MonkeyPatch, diarize: bool
 ) -> None:
     monkeypatch.setenv("DEEPGRAM_API_KEY", "test-token")
+    monkeypatch.delenv("MONTAJ_DEEPGRAM_DIARIZE", raising=False)
+    if diarize:
+        monkeypatch.setenv("MONTAJ_DEEPGRAM_DIARIZE", "true")
     requests: list[Request] = []
 
     def respond(request: Request, *, timeout: int) -> BytesIO:
@@ -63,6 +69,10 @@ def test_deepgram_words_query_and_cache(
     assert len(requests) == 1
     query = parse_qs(urlsplit(requests[0].full_url).query)
     assert query["model"] == ["nova-3"] and query["language"] == ["ar-EG"]
+    assert query["diarize"] == [str(diarize).lower()]
+    with connect(prepared_source.db_path) as db:
+        cost = db.execute("SELECT estimated_cost_usd FROM api_calls").fetchone()[0]
+        assert cost == pytest.approx((0.0063 if diarize else 0.0043) * 18 / 60)
     transcript = Transcript.model_validate_json(
         (prepared_source.data_dir / "sources/1/transcript.json").read_bytes()
     )
@@ -71,6 +81,40 @@ def test_deepgram_words_query_and_cache(
         ("Hello", 0),
         ("world.", None),
     ]
+
+
+def test_preflight_checks_budget_and_reuses_legacy_transcript(
+    prepared_source: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MONTAJ_DEEPGRAM_DIARIZE", raising=False)
+    runner = CliRunner()
+    args = ["run", "1", "--estimate", "--until", "transcribe", "--budget", "0"]
+    first = runner.invoke(app, args)
+    assert first.exit_code == 0, first.output
+    assert "transcribe: $0.001290" in first.output
+    assert "exceeds available budget" in first.output
+    assert "candidates:" not in first.output
+
+    directory = prepared_source.data_dir / "sources/1"
+    cached = Transcript(
+        text="",
+        language="en",
+        words=[],
+        input_hash=input_hash(
+            file_hash(directory / "audio.wav"),
+            "nova-3",
+            "en",
+            "diarize-smart-format-v1",
+        ),
+    )
+    path = directory / "transcript.json"
+    path.write_text(cached.model_dump_json(), encoding="utf-8")
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert "current transcript cached ($0.000000)" in result.output
+    assert path.read_text(encoding="utf-8") == cached.model_dump_json()
+    with connect(prepared_source.db_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM api_calls").fetchone()[0] == 0
 
 
 def test_budget_flag_blocks_transcription_before_request(

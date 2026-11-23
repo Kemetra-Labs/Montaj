@@ -3,7 +3,7 @@
 from os import getenv
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter
 
 
 class RetrySettings(BaseModel):
@@ -35,6 +35,7 @@ class Settings(BaseModel):
     anthropic_api_key: SecretStr | None = None
     deepgram_model: str = "nova-3"
     deepgram_language: str = "en"
+    deepgram_diarize: bool = False
     claude_model: str = "claude-sonnet-5-5"
     font_path: Path | None = None
     retry: RetrySettings = Field(default_factory=RetrySettings)
@@ -65,6 +66,7 @@ class Settings(BaseModel):
         anthropic_key = getenv("ANTHROPIC_API_KEY")
         font_path = getenv("MONTAJ_FONT_PATH")
         defaults = cls()
+        diarize = getenv("MONTAJ_DEEPGRAM_DIARIZE") or defaults.deepgram_diarize
 
         return cls(
             data_dir=Path(getenv("MONTAJ_DATA_DIR") or defaults.data_dir),
@@ -73,6 +75,7 @@ class Settings(BaseModel):
             deepgram_model=getenv("MONTAJ_DEEPGRAM_MODEL") or defaults.deepgram_model,
             deepgram_language=getenv("MONTAJ_DEEPGRAM_LANGUAGE")
             or defaults.deepgram_language,
+            deepgram_diarize=TypeAdapter(bool).validate_python(diarize),
             claude_model=getenv("MONTAJ_CLAUDE_MODEL") or defaults.claude_model,
             font_path=Path(font_path) if font_path else None,
             retry=RetrySettings.from_env(),
