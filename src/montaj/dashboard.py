@@ -26,6 +26,7 @@ from montaj.dashboard_parts import (
     hidden,
     link_button,
     parse_source_id,
+    permission_reason,
     render_dashboard_page,
 )
 from montaj.db import connect, fetch
@@ -277,7 +278,8 @@ def _overview(
     review = [
         row
         for row in board
-        if row.snapshot.allowed and row.snapshot.clips[ClipStatus.CHECKED]
+        if not permission_reason(row.snapshot.allowed, row.snapshot.basis)
+        and row.snapshot.clips[ClipStatus.CHECKED]
     ]
     views = {
         "all": ("All sources", board),
@@ -398,7 +400,7 @@ def dashboard_response(
         board = build_rows(settings, running=running, source_id=source_id)
         if source_id is not None:
             campaign = _campaign_name(settings, source_id)
-        elif operations:
+        elif operations and running is None:  # the form is not shown while busy
             choices = _campaign_choices(settings)
     except (sqlite3.Error, OSError, ValidationError, ValueError):
         return (

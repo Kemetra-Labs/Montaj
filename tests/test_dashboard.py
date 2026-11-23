@@ -9,7 +9,8 @@ from urllib.parse import urlencode
 import pytest
 from typer.testing import CliRunner
 
-from montaj.budget import Budget
+from montaj import dashboard as dashboard_module
+from montaj.budget import Budget, BudgetExceeded
 from montaj.cli import app
 from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
@@ -771,7 +772,12 @@ def test_run_buttons_are_disabled_while_a_job_runs(
         insert(
             db,
             Source(
-                id=2, path="b.mp4", title="B", niche=Niche.GAMES, source_allowed=True
+                id=2,
+                path="b.mp4",
+                title="B",
+                niche=Niche.GAMES,
+                source_allowed=True,
+                allowed_basis="Creator approval",
             ),
         )
     row = _rows(_home(db_path, running=running))
@@ -1174,20 +1180,24 @@ def test_detail_for_an_unpermitted_source_has_no_actions_and_says_why(
     lines = _stage_lines(page)
     assert len(lines) == 7
     assert all("Blocked" in line for line in lines.values())
-    # Each stage line gives the reason, so it appears once per line.
-    assert page.count("Record permission for this source first.") == len(lines)
-    assert "Record permission for this source before processing it." in page
+    # The reason shows once as the page notice, in one wording, not on each line.
+    reason = "Record permission for this source before processing it."
+    assert page.count(reason) == 1
+    assert "Record permission for this source first." not in page
 
 
-def test_detail_for_a_source_without_a_basis_still_lists_run_but_the_server_refuses(
+def test_detail_for_a_source_without_a_basis_is_blocked_and_the_server_refuses(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Known UX gap: the board only checks source_allowed, so a blank basis still
-    # shows Run. submit_stage and the confirm page both refuse such a source.
     _add_source(db_path, allowed=True, basis="  ")
     _imported(db_path)
+    _add_clip(db_path, ClipStatus.CHECKED)
     page = _detail_page(db_path)
-    assert "Run (confirm cost)" in _stage_lines(page)["Transcribe"]
+    for absent in ("<form", "<button", "/confirm", "Open review", "Preview clips"):
+        assert absent not in page
+    lines = _stage_lines(page)
+    assert all("Blocked" in line for line in lines.values())
+    assert page.count("Record a permission basis for this source first.") == 1
     settings = Settings(data_dir=db_path.parent)
     jobs = JobQueue(settings)
     monkeypatch.setattr(
@@ -1363,3 +1373,143 @@ def test_nav_no_longer_links_production_jobs(db_path: Path) -> None:
     for target in ("/dashboard", "/dashboard/sources/7", "/dashboard?view=attention"):
         page = handle_preview(settings, target, jobs)[2].decode()
         assert "Production jobs" not in page and 'href="/dashboard/jobs"' not in page
+
+
+def test_home_row_without_a_basis_has_no_actions_and_says_why(db_path: Path) -> None:
+    _add_source(db_path, allowed=True, basis=" ")
+    _imported(db_path)
+    page = _home(db_path)
+    assert page.count("Record a permission basis for this source first.") == 1
+    assert "<form" not in _rows(page) and "<button" not in _rows(page)
+
+
+def test_up_to_date_stage_offers_explicit_rerun(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path, "transcript.json", "candidates.json", "rank.json")
+    _add_clip(db_path, ClipStatus.CHECKED)
+    lines = _stage_lines(_detail_page(db_path))
+    for label in ("Transcribe", "Candidates + rank", "Draft + check"):
+        assert "Done" in lines[label] and "Up to date" in lines[label]
+        assert ">Rerun</a>" in lines[label] and "<form" not in lines[label]
+        assert "(confirm cost)" not in lines[label]
+    assert (
+        'href="/dashboard/sources/7/confirm?stage=rank"' in lines["Candidates + rank"]
+    )
+    assert "retry=yes" not in lines["Transcribe"]
+    free = lines["Cut + captions"]
+    assert "Up to date" in free and ">Rerun</button>" in free
+    assert 'action="/dashboard/stage" method="post"' in free
+    assert 'name="stage" value="render"' in free and 'name="retry"' not in free
+    assert "Up to date" not in lines["Ingest"] and "<a" not in lines["Ingest"]
+    for label in ("Review", "Export"):
+        assert "Up to date" not in lines[label] and "Rerun" not in lines[label]
+
+
+def test_rerun_is_disabled_while_a_job_runs_and_absent_read_only(
+    db_path: Path,
+) -> None:
+    _add_source(db_path)
+    _imported(db_path, "transcript.json", "candidates.json", "rank.json")
+    busy = _stage_lines(_detail_page(db_path, running=(2, "render")))
+    assert "<button disabled" in busy["Transcribe"] and "Rerun" in busy["Transcribe"]
+    assert "Another job is running (source 2)" in busy["Transcribe"]
+    read_only = _stage_lines(_detail_page(db_path, operations=False))["Transcribe"]
+    assert "Up to date" in read_only and "Rerun" not in read_only
+
+
+def test_failed_check_shows_the_reason_on_review_and_export_lines(
+    db_path: Path,
+) -> None:
+    _add_source(db_path)
+    _imported(db_path, "transcript.json", "candidates.json", "rank.json")
+    _add_clip(db_path, ClipStatus.NEEDS_FIX)
+    lines = _stage_lines(_detail_page(db_path))
+    for label in ("Review", "Export"):
+        assert "Check has failures. Fix the clips first." in lines[label]
+        assert "<a" not in lines[label] and "<button" not in lines[label]
+
+
+def test_over_budget_stop_is_shown_on_detail(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    jobs = JobQueue(settings)
+    threads = _capture_threads(monkeypatch)
+    stop = BudgetExceeded(
+        "rank: per-run budget ceiling $0.500000; estimated spend $0.400000, "
+        "next call $0.200000. <b>stop</b>"
+    )
+    monkeypatch.setattr(
+        "montaj.dashboard_jobs.run_board_stage",
+        lambda *a, **k: StageResult("Stopped during rank.", problem=str(stop)),
+    )
+    jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RANK, confirm=True))
+    threads[0].join(timeout=5)
+    page = handle_preview(settings, "/dashboard/sources/7", jobs)[2].decode()
+    assert "Stopped during rank." in page
+    assert "per-run budget ceiling $0.500000" in page
+    assert "&lt;b&gt;stop&lt;/b&gt;" in page and "<b>stop" not in page
+    assert ">Review clips</a>" not in page
+
+
+def test_restarted_dashboard_shows_checkpoints_and_resume(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path, "transcript.json", "candidates.json", "rank.json")
+    settings = Settings(data_dir=db_path.parent)
+    restarted = JobQueue(settings)
+    assert restarted.running() is None and restarted.live_job() is None
+    page = handle_preview(settings, "/dashboard", restarted)[2].decode()
+    row = _rows(page)
+    for label in ("Transcribe", "Candidates + rank"):
+        assert f'<li class="cell done"><span class="cell-name">{label}</span>' in row
+    assert 'name="resume" value="7"' in row and ">Resume</button>" in row
+    assert "<button disabled" not in row and "Live job" not in page
+    detail = handle_preview(settings, "/dashboard/sources/7", restarted)[2].decode()
+    assert detail.count(">Saved<") == 3
+
+
+def test_finished_job_with_a_problem_has_no_review_link(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+    jobs = JobQueue(Settings(data_dir=db_path.parent))
+    threads = _capture_threads(monkeypatch)
+    monkeypatch.setattr(
+        "montaj.dashboard_jobs.run_board_stage",
+        lambda *a, **k: StageResult("Rendered 1 clip.", problem="One clip skipped."),
+    )
+    jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
+    threads[0].join(timeout=5)
+    for target in ("/dashboard", "/dashboard/sources/7"):
+        page = _board(db_path, jobs, target)
+        assert "One clip skipped." in page and ">Review clips</a>" not in page
+
+
+def test_campaigns_are_not_queried_while_a_job_runs(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_campaign(db_path)
+    queried: list[bool] = []
+    original = dashboard_module._campaign_choices
+
+    def spy(settings: Settings) -> tuple[tuple[int, str], ...]:
+        queried.append(True)
+        return original(settings)
+
+    monkeypatch.setattr(dashboard_module, "_campaign_choices", spy)
+    _home(db_path, running=(7, "render"))
+    assert queried == []
+    _home(db_path)
+    assert queried == [True]
+
+
+def test_jobs_path_on_a_read_only_server_serves_the_board_without_forms(
+    db_path: Path,
+) -> None:
+    _add_campaign(db_path)
+    status, content_type, body = handle_preview(
+        Settings(data_dir=db_path.parent), JOBS_PATH, None
+    )
+    assert status == 200 and content_type.startswith("text/html")
+    assert b"Production board" in body and b"<form" not in body

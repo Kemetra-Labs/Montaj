@@ -15,6 +15,21 @@ STATE_LABELS = {
     "failed": "Failed",
     "pending": "Pending",
 }
+NOT_PERMITTED_REASON = "Record permission for this source first."
+NO_BASIS_REASON = "Record a permission basis for this source first."
+PERMISSION_REASONS = frozenset({NOT_PERMITTED_REASON, NO_BASIS_REASON})
+
+
+def permission_reason(allowed: bool, basis: str | None) -> str:
+    """Why a source may not run, or an empty string when it may.
+
+    The server refuses a source with no recorded basis, so the board does too.
+    """
+    if not allowed:
+        return NOT_PERMITTED_REASON
+    if not (basis or "").strip():
+        return NO_BASIS_REASON
+    return ""
 
 
 def render_dashboard_page(

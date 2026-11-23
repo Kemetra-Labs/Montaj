@@ -223,7 +223,7 @@ uv run montaj preview serve       # http://127.0.0.1:8765/ (loopback only)
 uv run montaj preview export 1    # copy renders into one folder with an index page
 ```
 
-`uv run montaj dashboard` starts the local operations dashboard. Open **Production jobs** to submit a YouTube HTTPS URL or a filename under `data/inbox`, monitor progress and spend, or resume an existing source. The dashboard runs one production job at a time. If the dashboard process stops, restart it and resume by source ID to reuse saved stages.
+`uv run montaj dashboard` starts the local production board at `/dashboard`. Start a job from **New job** with a YouTube HTTPS URL or a filename under `data/inbox`. Each source row shows a stage progress strip and one next action. Open a source to run, retry or rerun a stage. A stage that spends API money shows its estimate and needs one confirmation. Rerunning reuses saved output while the inputs are unchanged. The board runs one job at a time and shows its progress and spend while it runs. If the dashboard process stops, restart it and use **Resume** on the source row to reuse saved stages. Approving and rejecting clips stays in the clip preview. The board is served on loopback only.
 
 The dashboard worker uses the host's media tools and environment. If your credentials are in a local `.env` file, launch it with `uv run --env-file .env montaj dashboard`. The Docker pilot can run the job from the CLI with `docker compose run --rm montaj job ...`.
 

@@ -1,11 +1,12 @@
 """Stage progress cells and next actions for the production board."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Literal
 
 from montaj.config import Settings
 from montaj.dashboard import SourceSnapshot, _load
+from montaj.dashboard_parts import permission_reason
 from montaj.models import ClipStatus
 
 
@@ -48,7 +49,8 @@ STRIP: tuple[tuple[str, str], ...] = (
     ("export", "Export"),
 )
 
-_NOT_PERMITTED = "Record permission for this source first."
+_CHECK_FAILED = "Check has failures. Fix the clips first."
+_OPEN = {CellState.PENDING, CellState.BLOCKED}
 _MEDIA_FAILURES = {"Media missing", "Metadata unreadable", "Media unavailable"}
 _FIX_REASON = "Fix the flagged clips, then run this stage again."
 # A clip-stage cell is done once at least one clip holds a status in its set.
@@ -126,9 +128,27 @@ def _cells(snapshot: SourceSnapshot, running: str | None) -> tuple[StageCell, ..
     return tuple(cells)
 
 
-def _blocked_cells() -> tuple[StageCell, ...]:
+def _blocked_cells(reason: str) -> tuple[StageCell, ...]:
     return tuple(
-        StageCell(key, label, CellState.BLOCKED, _NOT_PERMITTED) for key, label in STRIP
+        StageCell(key, label, CellState.BLOCKED, reason) for key, label in STRIP
+    )
+
+
+def _with_check_failures(
+    snapshot: SourceSnapshot, cells: tuple[StageCell, ...]
+) -> tuple[StageCell, ...]:
+    """Flagged clips block export, and block review when nothing is left to review."""
+    if not snapshot.clips[ClipStatus.NEEDS_FIX]:
+        return cells
+    reviewable = (
+        snapshot.clips[ClipStatus.CHECKED] or snapshot.clips[ClipStatus.APPROVED]
+    )
+    blocked = {"export"} if reviewable else {"review", "export"}
+    return tuple(
+        replace(cell, state=CellState.BLOCKED, reason=_CHECK_FAILED)
+        if cell.key in blocked and cell.state in _OPEN
+        else cell
+        for cell in cells
     )
 
 
@@ -149,10 +169,11 @@ def _action(
 
 
 def _row(snapshot: SourceSnapshot, running: tuple[int, str] | None) -> BoardRow:
-    if not snapshot.allowed:
-        return BoardRow(snapshot, _blocked_cells(), None)
+    reason = permission_reason(snapshot.allowed, snapshot.basis)
+    if reason:
+        return BoardRow(snapshot, _blocked_cells(reason), None)
     live = running[1] if running and running[0] == snapshot.source_id else None
-    cells = _cells(snapshot, live)
+    cells = _with_check_failures(snapshot, _cells(snapshot, live))
     return BoardRow(snapshot, cells, _action(snapshot, cells))
 
 

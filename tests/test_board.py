@@ -1,11 +1,15 @@
 from pathlib import Path
 
+import pytest
+
 from montaj.board import CellState, NextAction, build_rows
 from montaj.config import Settings
 from montaj.db import connect, insert
 from montaj.models import Clip, ClipStatus, Niche, Source
 
 _BLOCKED_REASON = "Record permission for this source first."
+_NO_BASIS_REASON = "Record a permission basis for this source first."
+_CHECK_FAILED = "Check has failures. Fix the clips first."
 _META = '{"title":"Interview","duration":18,"video_hash":"v","audio_hash":"a"}'
 
 
@@ -17,6 +21,7 @@ def _add_source(db_path: Path, **fields: object) -> Settings:
         "title": "Interview",
         "niche": Niche.HEALTH,
         "source_allowed": True,
+        "allowed_basis": "Creator approval",
     }
     with connect(db_path) as db:
         insert(db, Source.model_validate(values | fields))
@@ -88,6 +93,55 @@ def test_unpermitted_source_blocks_everything(db_path: Path) -> None:
     assert all(cell.state is CellState.BLOCKED for cell in row.cells)
     assert all(cell.reason == _BLOCKED_REASON for cell in row.cells)
     assert row.action is None
+
+
+@pytest.mark.parametrize("basis", ["", "   ", None])
+def test_blank_basis_blocks_every_cell_without_an_action(
+    db_path: Path, basis: str | None
+) -> None:
+    settings = _add_source(db_path, allowed_basis=basis)
+    _ranked(settings)
+    _add_clip(db_path, ClipStatus.CHECKED)
+    (row,) = build_rows(settings, running=None)
+    assert all(cell.state is CellState.BLOCKED for cell in row.cells)
+    assert all(cell.reason == _NO_BASIS_REASON for cell in row.cells)
+    assert row.action is None
+
+
+def test_failed_check_blocks_review_export_with_reason(db_path: Path) -> None:
+    settings = _add_source(db_path)
+    _ranked(settings)
+    _add_clip(db_path, ClipStatus.NEEDS_FIX)
+    (row,) = build_rows(settings, running=None)
+    cells = {cell.key: cell for cell in row.cells}
+    assert cells["draft"].state is CellState.FAILED
+    for key in ("review", "export"):
+        assert cells[key].state is CellState.BLOCKED
+        assert cells[key].reason == _CHECK_FAILED
+    assert row.action is not None and row.action.kind == "fix"
+
+
+def test_failed_check_with_a_checked_clip_still_lets_review_open(
+    db_path: Path,
+) -> None:
+    settings = _add_source(db_path)
+    _ranked(settings)
+    _add_clip(db_path, ClipStatus.NEEDS_FIX)
+    _add_clip(db_path, ClipStatus.CHECKED, clip_id=2)
+    (row,) = build_rows(settings, running=None)
+    cells = {cell.key: cell for cell in row.cells}
+    assert cells["export"].reason == _CHECK_FAILED
+    assert cells["review"].reason != _CHECK_FAILED
+    assert row.action is not None and row.action.kind == "fix"
+
+
+def test_exported_stage_stays_done_beside_a_failed_check(db_path: Path) -> None:
+    settings = _add_source(db_path)
+    _ranked(settings)
+    _add_clip(db_path, ClipStatus.EXPORTED)
+    _add_clip(db_path, ClipStatus.NEEDS_FIX, clip_id=2)
+    states = _states(settings)
+    assert states["export"] is CellState.DONE and states["review"] is CellState.DONE
 
 
 def test_running_stage_is_marked_running(db_path: Path) -> None:
