@@ -205,6 +205,7 @@ def export_account(
     settings: Settings,
     account_id: int,
     *,
+    source_id: int | None = None,
     today: date | None = None,
     now: datetime | None = None,
     writer: Writer = print,
@@ -215,8 +216,9 @@ def export_account(
     with connect(settings.db_path) as db:
         account = fetch(db, Account, account_id)
         rows = db.execute(
-            "SELECT id FROM clips WHERE status = ? ORDER BY id",
-            (ClipStatus.APPROVED.value,),
+            """SELECT id FROM clips WHERE status = ?
+               AND (? IS NULL OR source_id = ?) ORDER BY id""",
+            (ClipStatus.APPROVED.value, source_id, source_id),
         ).fetchall()
     if account is None or account.id is None:
         raise ValueError(f"Account {account_id} does not exist.")
@@ -231,6 +233,8 @@ def export_account(
         / stamp
         / f"{account.id}-{_token(account.handle, 'account')}"
     )
+    if source_id is not None:
+        folder /= f"source-{source_id}"
     exported = 0
     refused = 0
     written: Path | None = None
@@ -258,11 +262,12 @@ def export_account(
 
 def export_clips(
     account: Annotated[int, typer.Option("--account", min=1)],
+    source: Annotated[int | None, typer.Option("--source", min=1)] = None,
 ) -> None:
     """Copy approved clips into a dated folder for manual upload."""
     try:
         exported, refused, folder = export_account(
-            Settings.from_env(), account, writer=typer.echo
+            Settings.from_env(), account, source_id=source, writer=typer.echo
         )
     except (OSError, sqlite3.Error, ValueError) as exc:
         typer.echo(f"Export failed: {exc}", err=True)

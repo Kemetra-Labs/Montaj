@@ -12,7 +12,7 @@ from montaj.config import Settings
 from montaj.cut import cut_source, selected_clips
 from montaj.db import connect, fetch, save_clip
 from montaj.ingest import load_source
-from montaj.media import MediaError
+from montaj.media import MediaError, source_lock
 from montaj.models import (
     Account,
     Campaign,
@@ -278,6 +278,60 @@ def review_source(
                 writer(f"Unknown key: {command or 'blank'}")
         except (MediaError, OSError, sqlite3.Error, ValueError) as exc:
             writer(f"Review edit failed: {exc}")
+
+
+def review_decision(
+    settings: Settings,
+    source_id: int,
+    clip_id: int,
+    *,
+    action: str,
+    version: str,
+    confirm_warning: bool = False,
+    reason: str = "",
+) -> str:
+    """Apply a decision to the checked clip shown in the browser."""
+    _, _, directory = load_source(settings, source_id)
+    with source_lock(directory, command="review"):
+        clip = next(
+            (
+                clip
+                for clip in _waiting(settings, source_id, set())
+                if clip.id == clip_id
+            ),
+            None,
+        )
+        if clip is None or not version or clip.check_input_hash != version:
+            raise ValueError("The clip changed. Refresh the batch before reviewing.")
+        current = stage_input_hash(clip, ClipStage.CHECK, _inputs(settings, source_id))
+        if version != current:
+            raise ValueError(
+                "The campaign check is out of date. Resume the production job."
+            )
+        messages: list[str] = []
+        if action == "approve":
+            checked = _recheck(settings, source_id, clip)
+            if (checked.check_result, checked.decision_reason) != (
+                clip.check_result,
+                clip.decision_reason,
+            ):
+                raise ValueError(
+                    "The campaign check changed. Refresh the batch before approving."
+                )
+            _approve(
+                settings,
+                source_id,
+                checked,
+                lambda _: "y" if confirm_warning else "",
+                messages.append,
+            )
+        elif action == "reject":
+            _reject(
+                settings, source_id, clip, lambda _: reason.strip(), messages.append
+            )
+        else:
+            raise ValueError("Choose approve or reject.")
+        return messages[-1]
 
 
 def review(

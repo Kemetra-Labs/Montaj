@@ -18,6 +18,7 @@ from montaj.draft import draft
 from montaj.export import export_clips
 from montaj.housekeeping import HousekeepingError, backup_database, clean_data
 from montaj.ingest import ingest
+from montaj.job import job
 from montaj.log import configure_logging
 from montaj.post_log import post_log_app
 from montaj.preview import dashboard, preview_app
@@ -44,6 +45,7 @@ app.command("captions")(captions)
 app.command("draft")(draft)
 app.command("check")(check_clips)
 app.command("run")(run)
+app.command("job")(job)
 app.command("review")(review)
 app.command("export")(export_clips)
 app.command("dashboard")(dashboard)

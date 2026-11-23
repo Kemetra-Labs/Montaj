@@ -1,5 +1,6 @@
 import json
 import re
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,9 @@ from montaj.budget import Budget
 from montaj.cli import app
 from montaj.config import Settings
 from montaj.db import connect, fetch, insert
+from montaj.job import produce_batch
 from montaj.models import Campaign, CampaignRules, Clip, ClipStatus, Platform
+from montaj.review import review_decision
 from montaj.run import STAGES, RunError, run_source
 from montaj.transcribe import Transcript, Word
 from tests.fakes import FakeLLM
@@ -199,3 +202,144 @@ def test_unknown_until_is_rejected(db_path: Path) -> None:
     result = CliRunner().invoke(app, ["run", "1", "--until", "export"])
     assert result.exit_code == 1
     assert "Unknown stage" in result.output
+
+
+def test_job_backfills_failed_checks_and_reuses_paid_work(
+    prepared_source: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _silence_ffmpeg(monkeypatch)
+    _campaign(prepared_source)
+    with connect(prepared_source.db_path) as db:
+        db.execute(
+            "UPDATE sources SET allowed_basis = 'fixture permission' WHERE id = 1"
+        )
+
+    class BatchModel(_Model):
+        def complete(self, prompt: str) -> str:
+            self.prompts.append(prompt)
+            if prompt.startswith("# Candidate"):
+                assert '"min_seconds":1.0' in prompt
+                return json.dumps(
+                    [
+                        {
+                            "start": start,
+                            "end": end,
+                            "moment_type": "story",
+                            "reason": "Stands alone",
+                            "hook_idea": "A hook",
+                        }
+                        for start, end in [(1, 4), (8, 12)]
+                    ]
+                )
+            if prompt.startswith("# Rank"):
+                return json.dumps(
+                    [
+                        {"clip_id": int(clip_id), "score": score, "reason": "Strong"}
+                        for clip_id, score in zip(
+                            re.findall(r'"clip_id":(\d+)', prompt), [9, 8]
+                        )
+                    ]
+                )
+            if prompt.startswith("# Draft"):
+                return (
+                    _draft().replace("#Clip", "#Other")
+                    if len(self.prompts) == 3
+                    else _draft()
+                )
+            raise AssertionError(prompt[:40])
+
+    backend, model = _Backend(), BatchModel([])
+    for _ in range(2):
+        result = produce_batch(
+            prepared_source,
+            1,
+            top=1,
+            budget=Budget(1, 1),
+            backend=backend,
+            llm=model,
+            renderer=_Renderer(),
+        )
+        assert result.ready == [2]
+        assert result.failures == 1 and result.stop is None
+    assert backend.calls == 1 and len(model.prompts) == 4
+    with connect(prepared_source.db_path) as db:
+        failed = fetch(db, Clip, 1)
+        ready = fetch(db, Clip, 2)
+    assert failed is not None and failed.check_input_hash
+    assert ready is not None and ready.check_input_hash
+    assert "cannot be approved" in review_decision(
+        prepared_source, 1, 1, action="approve", version=failed.check_input_hash
+    )
+    with pytest.raises(ValueError, match="Refresh"):
+        review_decision(prepared_source, 1, 2, action="approve", version="stale")
+    assert "Clip 2 approved" in review_decision(
+        prepared_source, 1, 2, action="approve", version=ready.check_input_hash
+    )
+    resumed = produce_batch(
+        prepared_source,
+        1,
+        top=1,
+        budget=Budget(1, 1),
+        backend=backend,
+        llm=model,
+        renderer=_Renderer(),
+    )
+    assert resumed.ready == [2] and resumed.previously_approved == 1
+
+
+def test_job_uses_the_permission_and_budget_guards(
+    prepared_source: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _campaign(prepared_source)
+    runner = CliRunner()
+    refused = runner.invoke(app, ["job", "--resume", "1"])
+    assert refused.exit_code == 1 and "permission basis" in refused.output
+    refused = runner.invoke(
+        app, ["job", "example.mp4", "--campaign", "1", "--niche", "games"]
+    )
+    assert refused.exit_code == 1 and "Only permitted sources" in refused.output
+    with connect(prepared_source.db_path) as db:
+        db.execute(
+            "UPDATE sources SET allowed_basis = 'fixture permission' WHERE id = 1"
+        )
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "unused-in-test")
+    stopped = runner.invoke(app, ["job", "--resume", "1", "--budget", "0"])
+    assert stopped.exit_code == 0
+    assert "0/10 clips" in stopped.output and "budget ceiling" in stopped.output
+    with connect(prepared_source.db_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM api_calls").fetchone()[0] == 0
+
+
+@pytest.mark.media
+def test_job_cli_imports_and_renders_an_english_video(
+    db_path: Path, media_fixture_dir: Path, ffmpeg: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MONTAJ_MIN_FREE_MB", "0")
+    campaign = _campaign(Settings(data_dir=db_path.parent))
+    monkeypatch.setattr(
+        "montaj.job.produce_batch",
+        partial(produce_batch, backend=_Backend(), llm=_Model([])),
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "job",
+            str(media_fixture_dir / "sample.mp4"),
+            "--campaign",
+            str(campaign),
+            "--niche",
+            "games",
+            "--allowed",
+            "--basis",
+            "fixture permission",
+            "--top",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "1/1 clips ready" in result.output
+    assert "/?source=1" in result.output
+    with connect(db_path) as db:
+        clip = fetch(db, Clip, 1)
+    assert clip is not None and clip.status == ClipStatus.CHECKED
+    assert clip.final_path and (db_path.parent / clip.final_path).stat().st_size > 0

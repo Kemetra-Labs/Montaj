@@ -1,4 +1,5 @@
 import csv
+import shutil
 from datetime import UTC, date, datetime
 
 from typer.testing import CliRunner
@@ -95,6 +96,31 @@ def _export(settings: Settings, account_id: int) -> tuple[int, int, object, list
         settings, account_id, today=_DAY, now=_WHEN, writer=notes.append
     )
     return exported, refused, folder, notes
+
+
+def test_source_export_leaves_other_approved_clips_waiting(
+    prepared_source: Settings, ranked_clip: Clip
+) -> None:
+    account = _account(prepared_source)
+    root = prepared_source.data_dir / "sources"
+    shutil.copytree(root / "1", root / "2")
+    with connect(prepared_source.db_path) as db:
+        insert(db, Source(id=2, path="other.mp4", title="Other", niche=Niche.GAMES))
+        other = insert(
+            db,
+            Clip(id=2, source_id=2, start_s=0.5, end_s=2.5, status=ClipStatus.RANKED),
+        )
+    _ready(prepared_source, ranked_clip)
+    _ready(prepared_source, other)
+    assert account.id is not None
+    exported, refused, folder = export_account(
+        prepared_source, account.id, source_id=1, today=_DAY, now=_WHEN
+    )
+    assert (exported, refused) == (1, 0)
+    assert folder is not None and folder.name == "source-1"
+    with connect(prepared_source.db_path) as db:
+        remaining = fetch(db, Clip, 2)
+    assert remaining is not None and remaining.status == ClipStatus.APPROVED
 
 
 def test_exports_text_manifest_and_marks_the_clip(

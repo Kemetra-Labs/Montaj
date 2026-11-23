@@ -1,10 +1,12 @@
 import shutil
 import subprocess
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
 from montaj.config import Settings
+from montaj.media import file_hash, reuse_file_hash
 
 ARABIC_SUBTITLE = """[Script Info]
 ScriptType: v4.00+
@@ -19,6 +21,16 @@ Style: Default,Noto Sans Arabic,28,&H00FFFFFF,&H00000000,&H00000000,&H00000000,0
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,مرحبا بالعالم
 """
+
+
+def test_source_hash_scope_detects_changed_bytes(tmp_path: Path) -> None:
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"first")
+    with reuse_file_hash(video):
+        assert file_hash(video) == sha256(b"first").hexdigest()
+        assert file_hash(video) == sha256(b"first").hexdigest()
+        video.write_bytes(b"replacement")
+        assert file_hash(video) == sha256(b"replacement").hexdigest()
 
 
 @pytest.mark.media

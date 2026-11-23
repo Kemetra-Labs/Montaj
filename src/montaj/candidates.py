@@ -23,6 +23,7 @@ from montaj.transcribe import Transcript, Word, require_usable_speech
 
 WINDOW_SECONDS = 450
 STEP_SECONDS = 390
+CANDIDATE_LIMIT = 30
 SENTENCE_END = (".", "?", "!", "؟", "。", "！", "？", "…")
 
 
@@ -122,7 +123,7 @@ def snap_pick(pick: Pick, words: list[Word], bounds: CandidateBounds) -> Pick | 
     return pick.model_copy(update={"start": start, "end": end})
 
 
-def unique_picks(picks: list[Pick], limit: int = 30) -> list[Pick]:
+def unique_picks(picks: list[Pick], limit: int = CANDIDATE_LIMIT) -> list[Pick]:
     selected: list[Pick] = []
     for candidate in picks:
         duplicate = any(

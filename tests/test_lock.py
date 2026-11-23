@@ -2,6 +2,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -86,6 +87,18 @@ def test_killed_process_frees_the_lock(tmp_path: Path) -> None:
             )
     finally:
         _stop(process)
+
+
+def test_another_dashboard_thread_cannot_reenter_a_source_lock(tmp_path: Path) -> None:
+    def review() -> None:
+        with source_lock(tmp_path, command="review"):
+            pass
+
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        with source_lock(tmp_path, command="job"):
+            with pytest.raises(MediaError, match="by job"):
+                worker.submit(review).result(timeout=5)
+        worker.submit(review).result(timeout=5)
 
 
 def test_same_process_reenters_the_lock(tmp_path: Path) -> None:
