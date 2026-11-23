@@ -17,7 +17,7 @@ from montaj.db import connect, fetch, insert
 from montaj.external import ExternalCallError
 from montaj.ingest import load_source
 from montaj.media import MediaError, atomic_text, source_lock
-from montaj.models import Clip
+from montaj.models import Campaign, CampaignBrief, Clip
 from montaj.pipeline import input_hash
 from montaj.transcribe import Transcript, Word, require_usable_speech
 
@@ -56,6 +56,7 @@ class SavedPick(Pick):
 
 class CandidateSet(BaseModel):
     input_hash: str
+    campaign_context_hash: str | None = None
     candidates: list[SavedPick]
 
 
@@ -71,6 +72,12 @@ class CandidateBounds(BaseModel):
 
 
 _picks = TypeAdapter(list[Pick])
+
+
+def campaign_context_hash(campaign: Campaign | None) -> str | None:
+    if campaign is None or (brief := campaign.rules.brief) is None:
+        return None
+    return input_hash(campaign.id, brief.model_dump(mode="json"))
 
 
 def windows(words: list[Word]) -> list[list[Word]]:
@@ -156,6 +163,7 @@ def _window_picks(
     transcript: Transcript,
     bounds: CandidateBounds,
     cache: Path,
+    brief: CampaignBrief | None,
 ) -> list[Pick]:
     words = sorted(transcript.words, key=lambda word: word.start)
     candidates = []
@@ -164,12 +172,14 @@ def _window_picks(
         try:
             raw = _picks.validate_json(path.read_bytes())
         except (OSError, ValidationError):
-            payload = {
+            payload: dict[str, object] = {
                 "language": transcript.language,
                 "min_seconds": bounds.min_seconds,
                 "max_seconds": bounds.max_seconds,
                 "words": [[word.start, word.end, word.text] for word in block],
             }
+            if brief is not None:
+                payload["campaign_brief"] = brief.model_dump(mode="json")
             prompt = (
                 template
                 + "\n\n"
@@ -184,7 +194,13 @@ def _window_picks(
 
 
 def _store(
-    settings: Settings, source_id: int, picks: list[Pick], key: str, output: Path
+    settings: Settings,
+    source_id: int,
+    picks: list[Pick],
+    output: Path,
+    *,
+    key: str,
+    context_hash: str | None,
 ) -> CandidateSet:
     with connect(settings.db_path) as db:
         db.execute("BEGIN IMMEDIATE")
@@ -212,7 +228,9 @@ def _store(
             if clip_id is None:
                 raise ValueError("Could not assign a candidate clip ID.")
             saved.append(SavedPick(clip_id=clip_id, **pick.model_dump()))
-        result = CandidateSet(input_hash=key, candidates=saved)
+        result = CandidateSet(
+            input_hash=key, campaign_context_hash=context_hash, candidates=saved
+        )
         atomic_text(output, result.model_dump_json(indent=2) + "\n")
     return result
 
@@ -226,15 +244,30 @@ def find_candidates(
     llm: LLM | None = None,
     wait: float = 0,
 ) -> tuple[CandidateSet, bool]:
-    source, _, directory = load_source(settings, source_id)
-    require_usable_speech(source)
+    _, _, directory = load_source(settings, source_id)
     transcript_file = directory / "transcript.json"
-    if not transcript_file.is_file():
-        raise ValueError(f"Transcribe source {source_id} before finding candidates.")
     template = Path("prompts/candidates.md").read_text(encoding="utf-8")
     client = llm or Claude(settings, source_id, "candidates", budget)
     output = directory / "candidates.json"
     with source_lock(directory, command="candidates", wait=wait):
+        source, _, _ = load_source(settings, source_id)
+        require_usable_speech(source)
+        if not transcript_file.is_file():
+            raise ValueError(
+                f"Transcribe source {source_id} before finding candidates."
+            )
+        campaign = None
+        if source.campaign_id is not None:
+            with connect(settings.db_path) as db:
+                campaign = fetch(db, Campaign, source.campaign_id)
+            if campaign is None:
+                raise ValueError(f"Campaign {source.campaign_id} does not exist.")
+        brief = campaign.rules.brief if campaign is not None else None
+        context_hash = campaign_context_hash(campaign)
+        if brief is not None:
+            template += "\n" + Path("prompts/candidates-brief.md").read_text(
+                encoding="utf-8"
+            )
         transcript = Transcript.model_validate_json(transcript_file.read_bytes())
         key = input_hash(
             transcript.model_dump(mode="json"),
@@ -242,6 +275,7 @@ def find_candidates(
             bounds.model_dump(),
             settings.claude_model,
             "candidates-v1",
+            *([context_hash] if context_hash is not None else []),
         )
         try:
             cached = CandidateSet.model_validate_json(output.read_bytes())
@@ -257,8 +291,13 @@ def find_candidates(
                     return cached, True
         windows_cache = directory / ".candidate-windows" / key
         windows_cache.mkdir(parents=True, exist_ok=True)
-        picks = _window_picks(client, template, transcript, bounds, windows_cache)
-        return _store(settings, source_id, picks, key, output), False
+        picks = _window_picks(
+            client, template, transcript, bounds, windows_cache, brief
+        )
+        result = _store(
+            settings, source_id, picks, output, key=key, context_hash=context_hash
+        )
+        return result, False
 
 
 def candidates(

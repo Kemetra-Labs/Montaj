@@ -1,6 +1,7 @@
 """Create campaigns from validated JSON rules and list saved campaigns."""
 
 import math
+import sqlite3
 from datetime import date
 from pathlib import Path
 from typing import Annotated
@@ -9,7 +10,10 @@ import typer
 from pydantic import ValidationError
 
 from montaj.cli_support import configured_db
-from montaj.db import insert
+from montaj.config import Settings
+from montaj.db import connect, fetch, insert, save_source
+from montaj.ingest import SourceError, load_source, require_campaign_source
+from montaj.media import MediaError, source_lock
 from montaj.models import Campaign, CampaignRules, Platform
 
 campaign_app = typer.Typer(no_args_is_help=True)
@@ -64,6 +68,55 @@ def add_campaign(
     with configured_db() as db:
         saved = insert(db, campaign)
     typer.echo(f"Added campaign {saved.id}: {saved.name}")
+
+
+@campaign_app.command("update-rules")
+def update_rules(
+    campaign_id: Annotated[int, typer.Argument(min=1)],
+    rules: Annotated[Path, typer.Option()],
+) -> None:
+    """Replace the validated rules and brief for a campaign."""
+    updated_rules = _load_rules(rules)
+    with configured_db() as db:
+        updated = db.execute(
+            "UPDATE campaigns SET rules_json = ? WHERE id = ?",
+            (updated_rules.model_dump_json(), campaign_id),
+        )
+        if updated.rowcount != 1:
+            raise typer.BadParameter(f"Campaign {campaign_id} does not exist.")
+    typer.echo(f"Updated rules for campaign {campaign_id}.")
+
+
+@campaign_app.command("link-source")
+def link_source(
+    source_id: Annotated[int, typer.Argument(min=1)],
+    campaign_id: Annotated[int, typer.Option("--campaign", min=1)],
+    wait: Annotated[
+        float,
+        typer.Option("--wait", min=0, help="Seconds to wait if this source is locked."),
+    ] = 0,
+) -> None:
+    """Link an ingested source to a campaign using its existing media and transcript."""
+    settings = Settings.from_env()
+    try:
+        _, _, directory = load_source(settings, source_id)
+        with source_lock(directory, command="campaign link-source", wait=wait):
+            source, _, _ = load_source(settings, source_id)
+            with connect(settings.db_path) as db:
+                db.execute("BEGIN IMMEDIATE")
+                campaign = fetch(db, Campaign, campaign_id)
+                if campaign is None:
+                    raise SourceError(f"Campaign {campaign_id} does not exist.", code=2)
+                require_campaign_source(source.url or source.path or "", campaign.rules)
+                source.campaign_id = campaign_id
+                save_source(db, source)
+    except SourceError as exc:
+        typer.echo(f"Link failed: {exc}", err=True)
+        raise typer.Exit(exc.code) from exc
+    except (MediaError, OSError, ValueError, sqlite3.Error) as exc:
+        typer.echo(f"Link failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Linked source {source_id} to campaign {campaign_id}.")
 
 
 @campaign_app.command("list")

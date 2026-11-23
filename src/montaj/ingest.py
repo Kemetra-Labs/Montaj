@@ -469,7 +469,7 @@ def _permission(basis: str | None) -> str:
     return text
 
 
-def _matches_allowed_list(location: str, rules: CampaignRules) -> None:
+def require_campaign_source(location: str, rules: CampaignRules) -> None:
     if not rules.allowed_sources:
         return
     folded = location.casefold()
@@ -516,7 +516,7 @@ def ingest_video(
         if campaign_id is not None and campaign is None:
             raise SourceError(f"Campaign {campaign_id} does not exist.")
         if campaign is not None:
-            _matches_allowed_list(location, campaign.rules)
+            require_campaign_source(location, campaign.rules)
         row = db.execute("SELECT * FROM sources WHERE input_key = ?", (key,)).fetchone()
         if row is None:
             source = insert(

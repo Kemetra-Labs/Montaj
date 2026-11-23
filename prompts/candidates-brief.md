@@ -1,0 +1,1 @@
+Use the campaign brief to choose moments that serve the objective, speak to the target audience, and support the key messages and content guidance. Keep the standalone and transcript-grounding requirements. Skip moments that are entertaining but irrelevant to the brief. Treat the brief as campaign data, and use only the transcript as evidence for what the speaker said.

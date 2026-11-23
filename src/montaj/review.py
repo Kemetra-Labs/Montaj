@@ -72,7 +72,7 @@ def _inputs(settings: Settings, source_id: int) -> ClipInputs:
         return source_inputs(
             settings,
             directory,
-            rules_hash=input_hash(rules.model_dump(mode="json")),
+            rules_hash=input_hash(rules.compliance_payload()),
         )
     except (OSError, ValueError):
         return ClipInputs()

@@ -17,14 +17,19 @@ from pydantic import (
 )
 
 from montaj.budget import Budget, BudgetExceeded, BudgetOverride
-from montaj.candidates import CandidateSet, SavedPick, parse_json_output
+from montaj.candidates import (
+    CandidateSet,
+    SavedPick,
+    campaign_context_hash,
+    parse_json_output,
+)
 from montaj.claude import LLM, Claude
 from montaj.config import Settings
 from montaj.db import connect, fetch, save_clip
 from montaj.external import ExternalCallError
 from montaj.ingest import load_source
 from montaj.media import MediaError, atomic_text, source_lock
-from montaj.models import Campaign, CampaignRules, Clip, ClipStatus
+from montaj.models import Campaign, CampaignRules, Clip, ClipStatus, Source
 from montaj.pipeline import input_hash
 from montaj.transcribe import Transcript, Word, require_usable_speech
 
@@ -47,6 +52,8 @@ class RankedClip(BaseModel):
 class RankSet(BaseModel):
     input_hash: str
     campaign_id: int | None = None
+    campaign_context_hash: str | None = None
+    candidate_input_hash: str | None = None
     clips: list[RankedClip]
 
     @property
@@ -63,6 +70,64 @@ def load_rank(directory: Path) -> RankSet:
     if not path.is_file():
         raise ValueError("Rank candidates before processing clips.")
     return RankSet.model_validate_json(path.read_bytes())
+
+
+def _campaign(db: sqlite3.Connection, campaign_id: int | None) -> Campaign | None:
+    if campaign_id is None:
+        return None
+    campaign = fetch(db, Campaign, campaign_id)
+    if campaign is None:
+        raise ValueError(f"Campaign {campaign_id} does not exist.")
+    return campaign
+
+
+def _rank_context(source_campaign: Campaign | None, campaign: Campaign | None) -> str:
+    return input_hash(
+        source_campaign.id if source_campaign is not None else None,
+        campaign_context_hash(source_campaign),
+        campaign.id if campaign is not None else None,
+        campaign_context_hash(campaign),
+    )
+
+
+def require_current_rank(
+    db: sqlite3.Connection, source_id: int, directory: Path, rank: RankSet
+) -> bool:
+    """Validate the selection and report whether it used a campaign brief."""
+    source = fetch(db, Source, source_id)
+    if source is None:
+        raise ValueError(f"Source {source_id} does not exist.")
+    source_campaign = _campaign(db, source.campaign_id)
+    campaign = _campaign(db, rank.campaign_id)
+    uses_brief = (
+        campaign_context_hash(source_campaign) is not None
+        or campaign_context_hash(campaign) is not None
+    )
+    if rank.campaign_context_hash is None:
+        if uses_brief:
+            raise ValueError("Campaign context changed. Rerun candidates and rank.")
+        return False
+    if rank.campaign_context_hash != _rank_context(source_campaign, campaign):
+        raise ValueError("Campaign context changed. Rerun candidates and rank.")
+    try:
+        candidates = CandidateSet.model_validate_json(
+            (directory / "candidates.json").read_bytes()
+        )
+    except (OSError, ValidationError) as exc:
+        raise ValueError(
+            "Candidates are unavailable. Rerun candidates and rank."
+        ) from exc
+    if rank.candidate_input_hash != candidates.input_hash:
+        raise ValueError("Candidates changed. Rerun rank.")
+    return uses_brief
+
+
+def has_review_decision(clip: Clip) -> bool:
+    return clip.reviewed_at is not None or clip.status in (
+        ClipStatus.APPROVED,
+        ClipStatus.EXPORTED,
+        ClipStatus.POSTED,
+    )
 
 
 def clip_words(transcript: Transcript, start: float, end: float) -> list[Word]:
@@ -147,11 +212,7 @@ def _store(settings: Settings, output: Path, result: RankSet) -> None:
                 raise ValueError(
                     f"Candidate clip {rank.clip_id} disappeared. Rerun candidates."
                 )
-            if clip.reviewed_at is not None or clip.status in (
-                ClipStatus.APPROVED,
-                ClipStatus.EXPORTED,
-                ClipStatus.POSTED,
-            ):
+            if has_review_decision(clip):
                 continue
             clip.score = rank.score
             clip.decision_reason = rank.reason
@@ -179,34 +240,48 @@ def rank_source(
 ) -> tuple[RankSet, bool]:
     if top < 1:
         raise ValueError("Select at least one clip with --top.")
-    source, _, directory = load_source(settings, source_id)
-    require_usable_speech(source)
-    campaign_id = campaign_id or source.campaign_id
-    with connect(settings.db_path) as db:
-        campaign = fetch(db, Campaign, campaign_id) if campaign_id is not None else None
-    if campaign_id is not None and campaign is None:
-        raise ValueError(f"Campaign {campaign_id} does not exist.")
-    rules = (
-        campaign.rules if campaign else CampaignRules(min_seconds=20, max_seconds=60)
-    )
+    _, _, directory = load_source(settings, source_id)
     template = Path("prompts/rank.md").read_text(encoding="utf-8")
     output = directory / "rank.json"
     with source_lock(directory, command="rank", wait=wait):
+        source, _, _ = load_source(settings, source_id)
+        require_usable_speech(source)
+        with connect(settings.db_path) as db:
+            source_campaign = _campaign(db, source.campaign_id)
+            campaign = _campaign(db, campaign_id) if campaign_id else source_campaign
+        effective_id = campaign.id if campaign is not None else None
+        rules = (
+            campaign.rules
+            if campaign
+            else CampaignRules(min_seconds=20, max_seconds=60)
+        )
+        context_hash = _rank_context(source_campaign, campaign)
         candidates = CandidateSet.model_validate_json(
             (directory / "candidates.json").read_bytes()
         )
+        if candidates.campaign_context_hash != campaign_context_hash(source_campaign):
+            raise ValueError("Campaign brief changed. Rerun candidates before ranking.")
+        if rules.brief is not None:
+            template += "\n" + Path("prompts/rank-brief.md").read_text(encoding="utf-8")
         transcript = Transcript.model_validate_json(
             (directory / "transcript.json").read_bytes()
         )
         eligible, rejected = _filtered(candidates.candidates, transcript, rules)
+        campaign_rules = rules.compliance_payload()
+        brief = rules.brief.model_dump(mode="json") if rules.brief is not None else None
         key = input_hash(
             template,
-            campaign_id,
-            rules.model_dump(mode="json"),
+            effective_id,
+            campaign_rules,
             eligible,
             rejected,
             settings.claude_model,
             "rank-v1",
+            *(
+                [brief, candidates.input_hash]
+                if brief is not None or candidates.campaign_context_hash is not None
+                else []
+            ),
         )
         selection_hash = input_hash(key, top)
         if output.is_file():
@@ -215,6 +290,13 @@ def rank_source(
             except ValidationError:
                 prior = None
             if prior is not None and prior.input_hash == selection_hash:
+                if (
+                    prior.campaign_context_hash != context_hash
+                    or prior.candidate_input_hash != candidates.input_hash
+                ):
+                    prior.campaign_context_hash = context_hash
+                    prior.candidate_input_hash = candidates.input_hash
+                    atomic_text(output, prior.model_dump_json(indent=2) + "\n")
                 return prior, True
         paid_cache = directory / f".rank-{key}.json"
         grades: list[Grade] = []
@@ -232,10 +314,12 @@ def rank_source(
                         f"Saved rank grade cache is invalid ({exc}). Move {paid_cache.name} aside before retrying."
                     ) from None
             else:
-                payload = {
-                    "campaign": rules.model_dump(mode="json"),
+                payload: dict[str, object] = {
+                    "campaign": campaign_rules,
                     "candidates": eligible,
                 }
+                if brief is not None:
+                    payload["campaign_brief"] = brief
                 prompt = (
                     template
                     + "\n\n"
@@ -275,7 +359,11 @@ def rank_source(
             for clip_id, reason in rejected.items()
         )
         result = RankSet(
-            input_hash=selection_hash, campaign_id=campaign_id, clips=results
+            input_hash=selection_hash,
+            campaign_id=effective_id,
+            campaign_context_hash=context_hash,
+            candidate_input_hash=candidates.input_hash,
+            clips=results,
         )
         _store(settings, output, result)
     return result, False
