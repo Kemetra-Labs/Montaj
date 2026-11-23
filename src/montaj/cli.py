@@ -20,7 +20,7 @@ from montaj.housekeeping import HousekeepingError, backup_database, clean_data
 from montaj.ingest import ingest
 from montaj.log import configure_logging
 from montaj.post_log import post_log_app
-from montaj.preview import preview_app
+from montaj.preview import dashboard, preview_app
 from montaj.rank import rank
 from montaj.review import review
 from montaj.run import run
@@ -46,6 +46,7 @@ app.command("check")(check_clips)
 app.command("run")(run)
 app.command("review")(review)
 app.command("export")(export_clips)
+app.command("dashboard")(dashboard)
 
 
 @app.callback()

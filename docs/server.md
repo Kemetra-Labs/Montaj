@@ -90,6 +90,8 @@ ssh -L 8765:127.0.0.1:8765 user@server
 
 Open `http://127.0.0.1:8765/` on the laptop. The tunnel ends at the server's loopback address. Do not change the preview bind address.
 
+Open `http://127.0.0.1:8765/dashboard` on the same tunnel for the operations view. `uv run montaj dashboard` prints that address and starts the same server when it is not already running. The dashboard reports saved checkpoints and recorded clip statuses. Running stages and making review decisions are terminal operations.
+
 ## Backup
 
 `montaj backup` writes an online copy of `data/montaj.db` to `data/backups/montaj-<UTC timestamp>.db` and keeps the newest `MONTAJ_BACKUP_KEEP` copies (default 7).

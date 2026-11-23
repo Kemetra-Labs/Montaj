@@ -248,7 +248,7 @@ def test_post_log_command_records_and_lists(
             "--url",
             _URL,
             "--at",
-            "2026-11-22T15:04:00+00:00",
+            datetime.now(UTC).isoformat(),
         ],
     )
     assert recorded.exit_code == 0

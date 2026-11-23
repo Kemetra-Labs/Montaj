@@ -158,6 +158,8 @@ docker compose run --rm montaj review 1
 
 The preview opens from disk and Compose publishes no ports. Review each clip in `review` before exporting it for manual posting.
 
+Run the operations dashboard from the Windows checkout with `uv run montaj dashboard`, then open `http://127.0.0.1:8765/dashboard`. The host process reads the same `data\` directory used by Compose.
+
 ## 🛠 Commands
 
 ### Stage commands
@@ -207,6 +209,8 @@ Read-only. It does not approve, export, or post.
 uv run montaj preview serve       # http://127.0.0.1:8765/ (loopback only)
 uv run montaj preview export 1    # copy renders into one folder with an index page
 ```
+
+`uv run montaj dashboard` opens the read-only operations view on the same loopback server. Use it to find sources needing attention, inspect saved checkpoints, see clip statuses and estimated API costs, or open a source's clips in the preview. Refresh to read the latest saved state. Keep running stages and recording review decisions in the CLI.
 
 On a remote server, tunnel in: `ssh -L 8765:127.0.0.1:8765 user@server`.
 
