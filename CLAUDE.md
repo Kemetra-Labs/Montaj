@@ -57,6 +57,6 @@ Once project setup provides the tooling, run ruff, mypy and pytest before every 
 
 ## Current phase
 
-Follow the [v3 build order](https://github.com/Kemetra-Labs/montaj/issues/31#issuecomment-7079949498). Phase 1 ends with the first real run and uses manual posting. Start Phase 2 metrics and reporting after Phase 1 is merged and the [first real run](https://github.com/Kemetra-Labs/montaj/issues/30) passes. API posting also needs the week 3 checkpoint and owner approval. The only web page is the read-only local preview.
+Follow the [v3 build order](https://github.com/Kemetra-Labs/montaj/issues/31#issuecomment-7079949498). Phase 1 ends with the first real run and uses manual posting. Start Phase 2 metrics and reporting after Phase 1 is merged and the [first real run](https://github.com/Kemetra-Labs/montaj/issues/30) passes. API posting also needs the week 3 checkpoint and owner approval. The only web pages are the loopback dashboard (production board, source pages, clip preview with review and export forms). `montaj preview serve` stays read-only. Every write needs the session token, and any paid start needs an explicit confirm.
 
 Aim for ten approved clips in the first real run. Approve fewer if needed and record what limited the count.
