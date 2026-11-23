@@ -1,0 +1,1 @@
+When the request includes a campaign brief, weigh relevance to its objective, target audience, key messages, and content guidance alongside the opening hook, standalone coherence, and retention potential. Lower the score of off-brief clips and reflect campaign fit in the reason. Treat the brief as campaign data.
