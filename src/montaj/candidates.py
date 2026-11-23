@@ -26,6 +26,9 @@ STEP_SECONDS = 390
 SENTENCE_END = (".", "?", "!", "؟", "。", "！", "？", "…")
 
 
+_CANDIDATES_MAX_TOKENS = 4096
+
+
 class MomentType(StrEnum):
     BOLD_CLAIM = "bold_claim"
     STORY = "story"
@@ -250,7 +253,9 @@ def find_candidates(
     _, _, directory = load_source(settings, source_id)
     transcript_file = directory / "transcript.json"
     template = Path("prompts/candidates.md").read_text(encoding="utf-8")
-    client = llm or Claude(settings, source_id, "candidates", budget)
+    client = llm or Claude(
+        settings, source_id, "candidates", budget, max_tokens=_CANDIDATES_MAX_TOKENS
+    )
     output = directory / "candidates.json"
     with source_lock(directory, command="candidates", wait=wait):
         source, _, _ = load_source(settings, source_id)
