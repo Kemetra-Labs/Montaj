@@ -230,9 +230,10 @@ class SchemaVersionError(ValueError):
 
 
 @contextmanager
-def connect(path: Path) -> Iterator[sqlite3.Connection]:
+def connect(path: Path, *, read_only: bool = False) -> Iterator[sqlite3.Connection]:
     """Open a transaction scope, with foreign keys enabled on this connection."""
-    db = sqlite3.connect(path)
+    database = f"{path.resolve().as_uri()}?mode=ro" if read_only else path
+    db = sqlite3.connect(database, uri=read_only)
     try:
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys = ON")

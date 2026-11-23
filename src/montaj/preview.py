@@ -6,12 +6,13 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import typer
 from pydantic import ValidationError
 
 from montaj.config import Settings
+from montaj.dashboard import BASE_PATH, dashboard_response, parse_source_id
 from montaj.db import connect, fetch
 from montaj.ingest import source_dir
 from montaj.models import Clip, Source
@@ -81,11 +82,12 @@ def load_preview_clips(
     settings: Settings, source_id: int | None = None, *, media: str = "serve"
 ) -> list[PreviewClip]:
     """Clips that have a render and still need a person to look at them."""
-    with connect(settings.db_path) as db:
+    with connect(settings.db_path, read_only=True) as db:
         rows = db.execute(
             """SELECT * FROM clips
                WHERE final_path IS NOT NULL
                  AND status NOT IN ('rejected', 'posted')
+                 AND EXISTS (SELECT 1 FROM sources WHERE id = clips.source_id AND source_allowed = 1)
                  AND (? IS NULL OR source_id = ?)
                ORDER BY source_id, id""",
             (source_id, source_id),
@@ -115,13 +117,17 @@ def load_preview_clips(
     return loaded
 
 
-def render_page(clips: list[PreviewClip]) -> str:
+def render_page(clips: list[PreviewClip], *, served: bool = False) -> str:
     """One read-only page. Approval stays in the terminal."""
     parts = [
         "<!DOCTYPE html>",
         '<html lang="en"><head><meta charset="utf-8"><title>Montaj preview</title></head>',
         "<body><h1>Clips to review</h1>",
     ]
+    if served:
+        parts.append(
+            '<nav aria-label="Main"><a href="/dashboard">Montaj operations</a> · <a href="/">All clips</a></nav>'
+        )
     if not clips:
         parts.append("<p>No rendered clips to review.</p>")
     for clip in clips:
@@ -147,10 +153,13 @@ def render_page(clips: list[PreviewClip]) -> str:
 
 
 def _clip_file(settings: Settings, clip_id: int) -> Path:
-    with connect(settings.db_path) as db:
+    with connect(settings.db_path, read_only=True) as db:
         clip = fetch(db, Clip, clip_id)
+        source = fetch(db, Source, clip.source_id) if clip is not None else None
     if (
         clip is None
+        or source is None
+        or not source.source_allowed
         or not clip.final_path
         or clip.status.value in {"rejected", "posted"}
     ):
@@ -163,14 +172,26 @@ def _clip_file(settings: Settings, clip_id: int) -> Path:
 
 def handle_preview(settings: Settings, target: str) -> tuple[int, str, bytes]:
     """Answer one read-only GET. Paths that leave the data directory are rejected."""
-    path = urlsplit(target).path
+    request = urlsplit(target)
+    path = request.path
+    query = parse_qs(request.query, keep_blank_values=True)
+    if path == BASE_PATH or path.startswith(f"{BASE_PATH}/"):
+        return dashboard_response(settings, path, query.get("view", [""])[0])
     if path in {"", "/"}:
-        page = render_page(load_preview_clips(settings)).encode("utf-8")
+        source_id = parse_source_id(query["source"][0]) if "source" in query else None
+        if "source" in query and source_id is None:
+            return 404, "text/plain; charset=utf-8", b"Source not found."
+        page = render_page(load_preview_clips(settings, source_id), served=True).encode(
+            "utf-8"
+        )
         return 200, "text/html; charset=utf-8", page
     media = "/media/"
-    if path.startswith(media) and path.removeprefix(media).isdigit():
+    clip_id = (
+        parse_source_id(path.removeprefix(media)) if path.startswith(media) else None
+    )
+    if clip_id is not None:
         try:
-            file_path = _clip_file(settings, int(path.removeprefix(media)))
+            file_path = _clip_file(settings, clip_id)
         except PreviewError as exc:
             return 404, "text/plain; charset=utf-8", str(exc).encode("utf-8")
         return 200, "video/mp4", file_path.read_bytes()
@@ -197,10 +218,20 @@ def export_preview(settings: Settings, source_id: int, dest: Path) -> int:
 def _handler(settings: Settings) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            hostname = self.headers.get("Host", "").partition(":")[0].lower()
+            if hostname not in {"127.0.0.1", "localhost"}:
+                self.send_error(400, "Use a localhost address")
+                return
             status, content_type, body = handle_preview(settings, self.path)
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; style-src 'self'; media-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+            )
             self.end_headers()
             self.wfile.write(body)
 
@@ -232,17 +263,26 @@ def serve(
     port: Annotated[int, typer.Option(min=1, max=65535)] = 8765,
 ) -> None:
     """Serve rendered clips on 127.0.0.1. Reach a remote host through an SSH tunnel."""
+    _start_server(port, "Preview", "/")
+
+
+def dashboard(port: Annotated[int, typer.Option(min=1, max=65535)] = 8765) -> None:
+    """Open the read-only operations dashboard on 127.0.0.1."""
+    _start_server(port, "Dashboard", BASE_PATH)
+
+
+def _start_server(port: int, name: str, path: str) -> None:
     settings = Settings.from_env()
     if not settings.db_path.is_file():
         typer.echo("Database is missing. Run montaj db init first.", err=True)
         raise typer.Exit(1)
-    typer.echo(f"Preview at http://127.0.0.1:{port}/  (Ctrl+C to stop)")
+    typer.echo(f"{name} at http://127.0.0.1:{port}{path}  (Ctrl+C to stop)")
     try:
         serve_preview(settings, port)
     except OSError as exc:
-        typer.echo(f"Preview failed: {exc}", err=True)
+        typer.echo(f"{name} failed: {exc}", err=True)
         raise typer.Exit(1) from exc
-    typer.echo("Preview stopped.")
+    typer.echo(f"{name} stopped.")
 
 
 @preview_app.command("export")
