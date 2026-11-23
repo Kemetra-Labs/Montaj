@@ -355,7 +355,7 @@ def test_partial_draft_with_a_flagged_clip_stays_runnable(db_path: Path) -> None
     (row,) = build_rows(settings, running=None)
     draft = {cell.key: cell for cell in row.cells}["draft"]
     assert draft.state is CellState.PENDING and draft.actionable
-    assert draft.reason == "1 of 3 done, 1 flagged clip"
+    assert draft.reason == f"1 of 3 done, 1 flagged clip. {_FIX_GUIDANCE}"
 
 
 def test_unreadable_ranking_never_marks_a_clip_stage_done(db_path: Path) -> None:

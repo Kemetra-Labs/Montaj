@@ -132,17 +132,17 @@ def _transcribe(snapshot: SourceSnapshot) -> _Evidence | None:
 
 
 def _draft_flagged(done: int, flagged: int, total: int) -> _Evidence | None:
-    """Flagged clips fail the draft cell once nothing else is left to draft."""
+    """Flagged clips fail the draft cell once nothing else is left to draft.
+
+    While other clips still need drafting, Run stays for them, never Retry.
+    """
     if not flagged:
         return None
+    flags = f"{_plural(flagged, 'flagged clip')}. {FIX_GUIDANCE}"
     if done + flagged == total:
-        return (
-            CellState.FAILED,
-            f"{_plural(flagged, 'flagged clip')}. {FIX_GUIDANCE}",
-            False,
-        )
+        return CellState.FAILED, flags, False
     note = f"{done} of {total} done, " if done else ""
-    return CellState.PENDING, f"{note}{_plural(flagged, 'flagged clip')}", True
+    return CellState.PENDING, f"{note}{flags}", True
 
 
 def _clip_stage(snapshot: SourceSnapshot, key: str, batch: _Batch) -> _Evidence | None:
