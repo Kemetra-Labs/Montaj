@@ -1,5 +1,7 @@
 """Run the paid and render stages in order. Review and export stay manual."""
 
+import sqlite3
+import wave
 from collections.abc import Callable
 from dataclasses import dataclass
 from time import perf_counter
@@ -7,19 +9,32 @@ from typing import Annotated
 
 import typer
 
-from montaj.budget import Budget, BudgetOverride
+from montaj.budget import Budget, BudgetExceeded, BudgetOverride, check_budget
 from montaj.candidates import CandidateBounds, find_candidates
 from montaj.captions import caption_source
 from montaj.check import check_source
 from montaj.claude import LLM
 from montaj.config import Settings
+from montaj.costs import (
+    Service,
+    Usage,
+    cost_totals,
+    deepgram_billing_model,
+    estimate_cost,
+)
 from montaj.cut import Renderer, cut_source
 from montaj.db import connect
 from montaj.draft import draft_source
 from montaj.ingest import load_source
 from montaj.media import MediaError, source_lock
 from montaj.rank import rank_source
-from montaj.transcribe import Transcriber, transcribe_source
+from montaj.transcribe import (
+    Transcriber,
+    audio_duration,
+    cached_transcript,
+    transcribe_source,
+    transcript_input_hashes,
+)
 
 STAGES = (
     "transcribe",
@@ -82,6 +97,58 @@ def _run_stage(
     )
 
 
+def _planned_stages(until: str) -> tuple[str, ...]:
+    if until not in STAGES:
+        names = ", ".join(STAGES)
+        raise ValueError(f"Unknown stage {until}. Choose one of: {names}.")
+    return STAGES[: STAGES.index(until) + 1]
+
+
+def estimate_run(
+    settings: Settings, source_id: int, until: str, language: str, budget: Budget
+) -> list[str]:
+    """Price transcription offline and show prior spend for the downstream stages."""
+    stages = _planned_stages(until)
+    _, _, directory = load_source(settings, source_id, read_only=True)
+    audio = directory / "audio.wav"
+    keys = transcript_input_hashes(settings, audio, language)
+    transcript = cached_transcript(directory, keys)
+    transcription = 0.0
+    if transcript is None:
+        transcription = estimate_cost(
+            Service.DEEPGRAM,
+            deepgram_billing_model(settings.deepgram_model, language),
+            Usage(seconds=audio_duration(audio), diarization=settings.deepgram_diarize),
+        )
+    with connect(settings.db_path, read_only=True) as db:
+        past = cost_totals(db, source_id)
+        lines = [
+            f"Source {source_id} prior estimated API spend: ${past.total:.6f}",
+            f"Run ceiling: ${budget.per_run:.6f} | Source ceiling: ${budget.per_source:.6f}",
+        ]
+        if transcript is not None:
+            lines.append("transcribe: current transcript cached ($0.000000)")
+        else:
+            diarization = "on" if settings.deepgram_diarize else "off"
+            lines.append(
+                f"transcribe: ${transcription:.6f} for one full audio pass "
+                f"(diarization {diarization}, before retries or chunk reuse)"
+            )
+            try:
+                check_budget(db, budget, source_id, "transcribe", transcription)
+            except BudgetExceeded as exc:
+                lines.append(f"Full transcription pass exceeds available budget. {exc}")
+            else:
+                lines.append("Full transcription pass fits the current budget.")
+    for stage in ("candidates", "rank", "draft"):
+        if stage in stages:
+            lines.append(
+                f"{stage}: remaining cost depends on inputs and cache reuse "
+                f"(prior estimated spend ${past.by_stage.get(stage, 0):.6f})"
+            )
+    return lines
+
+
 def run_source(
     settings: Settings,
     source_id: int,
@@ -100,9 +167,7 @@ def run_source(
     wait: float = 0,
 ) -> list[StageReport]:
     """Call each existing stage function, stopping at the first failure."""
-    if until not in STAGES:
-        names = ", ".join(STAGES)
-        raise ValueError(f"Unknown stage {until}. Choose one of: {names}.")
+    stages = _planned_stages(until)
     requested = language or settings.deepgram_language
     steps: dict[str, Callable[[], str]] = {
         "transcribe": lambda: _transcribe(
@@ -120,7 +185,7 @@ def run_source(
     _, _, directory = load_source(settings, source_id)
     reports: list[StageReport] = []
     with source_lock(directory, command="run", wait=wait):
-        for stage in STAGES[: STAGES.index(until) + 1]:
+        for stage in stages:
             reports.append(_run_stage(settings, source_id, stage, steps[stage]))
     return reports
 
@@ -211,6 +276,13 @@ def run(
     campaign: Annotated[int | None, typer.Option(min=1)] = None,
     until: Annotated[str, typer.Option()] = "check",
     budget: BudgetOverride = None,
+    estimate: Annotated[
+        bool,
+        typer.Option(
+            "--estimate",
+            help="Estimate transcription and show prior API spend offline.",
+        ),
+    ] = False,
     language: Annotated[
         str | None, typer.Option(help="Deepgram language code, such as en or ar-EG.")
     ] = None,
@@ -225,20 +297,31 @@ def run(
     ] = 0,
 ) -> None:
     """Run transcribe through check. Does not review, export, or post."""
-    settings = Settings.from_env()
     try:
+        settings = Settings.from_env()
+        limits = Budget.from_settings(settings, budget)
+        if estimate:
+            for line in estimate_run(
+                settings,
+                source_id,
+                until,
+                language or settings.deepgram_language,
+                limits,
+            ):
+                typer.echo(line)
+            return
         reports = run_source(
             settings,
             source_id,
             campaign_id=campaign,
             until=until,
-            budget=Budget.from_settings(settings, budget),
+            budget=limits,
             language=language,
             force_language=force_language,
             top=top,
             wait=wait,
         )
-    except MediaError as exc:
+    except (MediaError, OSError, sqlite3.Error, wave.Error) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
     except RunError as exc:

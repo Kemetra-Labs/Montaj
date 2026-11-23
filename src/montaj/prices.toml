@@ -1,11 +1,13 @@
-# Checked 2026-11-22. USD estimates before discounts or negotiated prices.
-# Use Deepgram's regular list rate as a conservative estimate for pre-recorded input.
+# Checked 2026-11-23. USD estimates before discounts or negotiated prices.
+# Deepgram pay-as-you-go prerecorded rates and optional speaker diarization.
 # https://deepgram.com/pricing
 [deepgram.nova-3]
-usd_per_minute = 0.0077
+usd_per_minute = 0.0043
+diarization_usd_per_minute = 0.0020
 
 [deepgram.nova-3-multilingual]
-usd_per_minute = 0.0092
+usd_per_minute = 0.0052
+diarization_usd_per_minute = 0.0020
 
 # Claude Sonnet 5.5, model id claude-sonnet-5-5. Confirmed 2026-11-22.
 # https://platform.claude.com/docs/en/models/sonnet-5-5/overview

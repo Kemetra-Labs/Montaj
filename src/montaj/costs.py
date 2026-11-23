@@ -18,6 +18,7 @@ class Service(StrEnum):
 
 class Usage(BaseModel):
     seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    diarization: bool = False
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
 
@@ -31,7 +32,10 @@ def estimate_cost(
     try:
         rates = prices[service][model]
         if service == Service.DEEPGRAM:
-            return (usage.seconds or 0) * float(rates["usd_per_minute"]) / 60
+            per_minute = float(rates["usd_per_minute"])
+            if usage.diarization:
+                per_minute += float(rates["diarization_usd_per_minute"])
+            return (usage.seconds or 0) * per_minute / 60
         input_rate = float(rates["usd_per_million_input_tokens"])
         output_rate = float(rates["usd_per_million_output_tokens"])
         threshold = rates.get("long_prompt_threshold_tokens")
@@ -46,6 +50,10 @@ def estimate_cost(
         raise ValueError(
             f"Missing price for {service} model {model} in {path}."
         ) from exc
+
+
+def deepgram_billing_model(model: str, language: str) -> str:
+    return f"{model}-multilingual" if language == "multi" else model
 
 
 def log_api_call(

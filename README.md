@@ -110,6 +110,7 @@ Run commands as `uv run montaj ...`.
 | `MONTAJ_DATA_DIR` | Where the database and media live | `data/` |
 | `MONTAJ_DEEPGRAM_LANGUAGE` | Language sent to Deepgram | `en` |
 | `MONTAJ_DEEPGRAM_MODEL` | Transcription model | `nova-3` |
+| `MONTAJ_DEEPGRAM_DIARIZE` | Request and budget for optional speaker labels | `false` |
 | `MONTAJ_CLAUDE_MODEL` | Claude model | `claude-sonnet-5-5` |
 | `MONTAJ_RANK_MODEL` | Claude model for the rank stage only | `claude-haiku-5-5` |
 | `MONTAJ_MAX_COST_PER_RUN_USD` | Spending ceiling for one run | `0.50` |
@@ -121,6 +122,8 @@ Run commands as `uv run montaj ...`.
 | `MONTAJ_CLEAN_OLDER_THAN_DAYS` | Default age for `clean` | `14` |
 
 Paid stages stop **before** the request when the next call would pass either cost ceiling. `--budget 1.00` overrides both ceilings for that command.
+
+Run `uv run montaj run 1 --estimate` for an offline budget check. It shows whether a current transcript can be reused, the estimated cost of one full transcription pass if needed, and prior spend for the requested paid stages. Downstream Claude costs depend on the generated inputs and cache reuse. The estimate sends no API requests.
 
 ### Windows pilot with Docker Desktop
 

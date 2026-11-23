@@ -231,11 +231,11 @@ def _ready(directory: Path) -> SourceMetadata | None:
 
 
 def load_source(
-    settings: Settings, source_id: int
+    settings: Settings, source_id: int, *, read_only: bool = False
 ) -> tuple[Source, SourceMetadata, Path]:
     if not settings.db_path.is_file():
         raise SourceError("Database is missing. Run montaj db init first.")
-    with connect(settings.db_path) as db:
+    with connect(settings.db_path, read_only=read_only) as db:
         source = fetch(db, Source, source_id)
     if source is None or not source.source_allowed:
         raise SourceError(f"Source {source_id} is missing or lacks permission.")

@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 from montaj.budget import Budget, BudgetExceeded
 from montaj.config import RetrySettings, Settings
-from montaj.costs import Service, Usage, estimate_cost
+from montaj.costs import Service, Usage, deepgram_billing_model, estimate_cost
 from montaj.db import SCHEMA_VERSION, connect
 from montaj.external import CallContext, CallResult, ExternalCallError, call_external
 from montaj.housekeeping import disk_free
@@ -352,9 +352,9 @@ def online_checks(
     if deepgram_key is None or not deepgram_key.get_secret_value().strip():
         results.append(Check("deepgram", False, "bad key"))
     else:
-        billing = settings.deepgram_model
-        if settings.deepgram_language == "multi":
-            billing = f"{billing}-multilingual"
+        billing = deepgram_billing_model(
+            settings.deepgram_model, settings.deepgram_language
+        )
         with TemporaryDirectory() as directory:
             audio = Path(directory) / "silence.wav"
             _silent_wav(audio)
