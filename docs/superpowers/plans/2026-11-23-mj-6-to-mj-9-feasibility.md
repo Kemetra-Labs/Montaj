@@ -17,7 +17,7 @@ Use English fixtures, existing caches read-only, and a disposable directory for 
 - [x] Write regressions for transcript error counts, matched word timing, false speech, and swapped speaker labels. Implement a scorer for excerpt-relative word and activity data. Run it against the available synthetic fixture and any local model output whose provenance can be verified. Inspect the Deepgram cache for an independent annotated match.
 - [x] Verify dashboard restart behavior with fake work and source checkpoints. Compare it with a disposable SQLite Huey queue or primary documentation when execution is unavailable. Document the operator recovery path and decision.
 - [x] Write tests for an OTIO handoff to DaVinci Resolve using same-rate synthetic rendered clips. Verify relative references, exact frame ranges, adapter round-trip, and missing-media rejection. Confirm actual demand and editor execution separately from adapter verification.
-- [ ] Record per-tool decisions and reproducible commands in `docs/engineering/mj-6-to-mj-9-feasibility.md`. Link the Tool Radar. Run local checks, request one branch review, open the PR, wait for required checks, and merge the reviewed head.
+- [x] Record per-tool decisions and reproducible commands in `docs/engineering/mj-6-to-mj-9-feasibility.md`. Link the Tool Radar. Run local checks, address the branch review, and open the PR. Merge the reviewed head once the required checks pass.
 
 ## Review focus
 

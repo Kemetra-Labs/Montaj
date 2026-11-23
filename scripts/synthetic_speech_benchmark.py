@@ -25,6 +25,10 @@ def _pcm_samples(audio: Path):
 
 
 def _faster_whisper(model: Path):
+    if not (model / "tokenizer.json").is_file():
+        raise ValueError(
+            "faster-whisper needs a local tokenizer.json in the model folder."
+        )
     from faster_whisper import WhisperModel
 
     engine = WhisperModel(

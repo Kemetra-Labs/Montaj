@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import pytest
 
 from montaj.transcribe import Word
 from scripts.speech_probe import Span, score_activity, score_words
+from scripts.synthetic_speech_benchmark import _faster_whisper
 
 
 def test_word_error_rate_and_timing_use_aligned_equal_words() -> None:
@@ -49,3 +52,8 @@ def test_spans_reject_reversed_and_unlabeled_diarization() -> None:
             [Span(start=0, end=1)],
             diarization=True,
         )
+
+
+def test_faster_whisper_requires_an_offline_tokenizer(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"local tokenizer\.json"):
+        _faster_whisper(tmp_path)
