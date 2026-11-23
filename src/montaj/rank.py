@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+)
 
 from montaj.budget import Budget, BudgetExceeded, BudgetOverride
 from montaj.candidates import (
@@ -28,9 +35,11 @@ from montaj.transcribe import Transcript, Word, require_usable_speech
 
 
 class Grade(BaseModel):
-    clip_id: int
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    clip_id: int = Field(gt=0)
     score: float = Field(ge=1, le=10, allow_inf_nan=False)
-    reason: str = Field(min_length=1)
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class RankedClip(BaseModel):
@@ -53,6 +62,7 @@ class RankSet(BaseModel):
 
 
 _grades = TypeAdapter(list[Grade])
+_RANK_MAX_TOKENS = 4096
 
 
 def load_rank(directory: Path) -> RankSet:
@@ -154,20 +164,43 @@ def _filtered(
     return eligible, rejected
 
 
+def _validated_grades(body: str | bytes, ids: set[int]) -> list[Grade]:
+    try:
+        grades = _grades.validate_json(body)
+    except ValidationError as exc:
+        errors = exc.errors(
+            include_url=False, include_context=False, include_input=False
+        )
+        first = errors[0]
+        if first["type"] == "json_invalid":
+            detail = "invalid or incomplete JSON"
+        elif first["type"] == "list_type":
+            detail = "expected a JSON array of grades"
+        elif first["loc"] and first["loc"][-1] in {"clip_id", "score", "reason"}:
+            detail = f"invalid grade {first['loc'][-1]}"
+        else:
+            detail = "expected each grade to contain clip_id, score, and reason"
+        raise ValueError(detail) from None
+    returned = {grade.clip_id for grade in grades}
+    if len(grades) != len(returned):
+        raise ValueError("duplicate candidate IDs")
+    if returned - ids:
+        raise ValueError("unexpected candidate IDs")
+    if ids - returned:
+        raise ValueError("missing candidate IDs")
+    return grades
+
+
 def _ratings(client: LLM, prompt: str, ids: set[int]) -> list[Grade]:
-    for request in (
-        prompt,
-        prompt + "\nInclude each expected clip ID exactly once. Return JSON only.",
-    ):
-        try:
-            answers = _grades.validate_json(parse_json_output(client.complete(request)))
-        except ValidationError:
-            continue
-        if len(answers) == len(ids) and {grade.clip_id for grade in answers} == ids:
-            return answers
-    raise ValueError(
-        "Claude did not return one valid grade for each eligible candidate."
-    )
+    response = client.complete(prompt)
+    if not isinstance(response, str):
+        raise ValueError(
+            "Claude rank: expected text containing a JSON array of grades."
+        )
+    try:
+        return _validated_grades(parse_json_output(response), ids)
+    except ValueError as exc:
+        raise ValueError(f"Claude rank: {exc}. No grades were saved.") from None
 
 
 def _store(settings: Settings, output: Path, result: RankSet) -> None:
@@ -274,7 +307,12 @@ def rank_source(
                 if item.clip_id not in rejected
             }
             if paid_cache.is_file():
-                grades = _grades.validate_json(paid_cache.read_bytes())
+                try:
+                    grades = _validated_grades(paid_cache.read_bytes(), ids)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Saved rank grade cache is invalid ({exc}). Move {paid_cache.name} aside before retrying."
+                    ) from None
             else:
                 payload: dict[str, object] = {
                     "campaign": campaign_rules,
@@ -288,7 +326,20 @@ def rank_source(
                     + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
                 )
                 grades = _ratings(
-                    llm or Claude(settings, source_id, "rank", budget), prompt, ids
+                    llm
+                    or Claude(
+                        settings,
+                        source_id,
+                        "rank",
+                        budget,
+                        max_tokens=_RANK_MAX_TOKENS,
+                        require_complete=True,
+                        thinking="between_tools"
+                        if settings.claude_model == "claude-sonnet-5-5"
+                        else None,
+                    ),
+                    prompt,
+                    ids,
                 )
                 atomic_text(paid_cache, _grades.dump_json(grades).decode("utf-8"))
         grades.sort(key=lambda item: (-item.score, item.clip_id))
