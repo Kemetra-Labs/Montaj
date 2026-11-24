@@ -5,10 +5,13 @@ Plain functions and frozen dataclasses with no HTML, so a page only renders them
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from montaj.board import BoardRow, CellState, NextAction, StageCell
+from montaj.config import Settings
 from montaj.dashboard_parts import permission_reason
-from montaj.models import ClipStatus
+from montaj.db import connect
+from montaj.models import CheckResult, Clip, ClipStatus
 
 STAGES: tuple[tuple[str, str], ...] = (
     ("ingest", "Ingest"),
@@ -162,3 +165,66 @@ def build_view(
     )
     cards = tuple(_card(row, source_ceiling) for row in rows)
     return BoardView(summary, cards, outputs)
+
+
+# Clips that have media to show. Candidate, ranked and rejected clips have none.
+_RENDERED = (
+    ClipStatus.RENDERED,
+    ClipStatus.CAPTIONED,
+    ClipStatus.DRAFTED,
+    ClipStatus.CHECKED,
+    ClipStatus.NEEDS_FIX,
+    ClipStatus.APPROVED,
+    ClipStatus.EXPORTED,
+    ClipStatus.POSTED,
+)
+_REASON_MAX = 160
+
+
+def _short(text: str | None) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= _REASON_MAX else text[: _REASON_MAX - 3] + "..."
+
+
+def _modified(settings: Settings, relative: str | None) -> datetime | None:
+    """When a clip's media file last changed, or None when it cannot be trusted."""
+    if not relative:
+        return None
+    path = settings.data_dir / relative
+    inside = path.resolve().is_relative_to(settings.data_dir.resolve())
+    if not inside or path.is_symlink() or not path.is_file():
+        return None
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def _output(settings: Settings, clip: Clip) -> OutputRecord:
+    assert clip.id is not None
+    media = clip.final_path or clip.raw_path
+    failed = (
+        clip.status is ClipStatus.NEEDS_FIX or clip.check_result is CheckResult.FAIL
+    )
+    return OutputRecord(
+        clip.id,
+        clip.source_id,
+        (clip.hook_text or clip.hook_a or "").strip() or f"Clip {clip.id}",
+        Path(media or "").name,
+        clip.end_s - clip.start_s,
+        clip.status,
+        failed,
+        _short(clip.decision_reason) if failed else "",
+        _modified(settings, media),
+    )
+
+
+def recent_outputs(settings: Settings, limit: int = 5) -> tuple[OutputRecord, ...]:
+    """The newest rendered clips across sources. The renderer escapes the text."""
+    marks = ", ".join("?" for _ in _RENDERED)
+    with connect(settings.db_path, read_only=True) as db:
+        rows = db.execute(
+            f"SELECT * FROM clips WHERE status IN ({marks}) ORDER BY id DESC LIMIT ?",
+            (*(status.value for status in _RENDERED), limit),
+        ).fetchall()
+    return tuple(_output(settings, Clip.model_validate(dict(row))) for row in rows)
