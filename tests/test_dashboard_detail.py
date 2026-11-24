@@ -156,14 +156,15 @@ def test_detail_header_shows_campaign_and_source_spend(db_path: Path) -> None:
         log_api_call(db, 7, "transcribe", Service.DEEPGRAM, Usage(seconds=1), 0.5)
     page = _detail_page(db_path)
     assert "&lt;b&gt;Spring&lt;/b&gt;" in page and "<b>Spring" not in page
-    assert "$0.500000 of $2.00 source ceiling" in page
+    assert "$0.50 of $2.00 source ceiling" in page
 
 
 def test_detail_shows_live_job_panel(db_path: Path) -> None:
     _add_source(db_path)
     running = LiveJob(7, "Transcribing", True, 12.4, 0.25, "", "")
     page = _detail_page(db_path, running=(7, "transcribe"), live=running)
-    assert "Transcribing" in page and "Elapsed 12 s" in page and "$0.250000" in page
+    assert "Transcribing" in page and "Elapsed 12 s" in page and "$0.25" in page
+    assert "$0.250000" not in page
     assert '<meta http-equiv="refresh" content="3">' in page
     done = LiveJob(
         7,

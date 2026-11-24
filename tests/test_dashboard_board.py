@@ -101,11 +101,11 @@ def test_home_top_bar_counts_attention_review_and_spend(db_path: Path) -> None:
     idle = _home(db_path)
     assert "<dt>Needs attention</dt><dd>1</dd>" in idle
     assert "<dt>Clips awaiting review</dt><dd>1</dd>" in idle
-    assert "<dt>Est. source API spend</dt><dd>$0.012345</dd>" in idle
+    assert "<dt>Est. source API spend</dt><dd>$0.01</dd>" in idle
     assert 'href="#new-job">New job</a>' in idle
     assert "Run spend" not in idle
     running = _home(db_path, running=(7, "render"), run_spend=(0.5, 5.0))
-    assert "<dt>Run spend</dt><dd>$0.500000 of $5.00 run ceiling</dd>" in running
+    assert "<dt>Run spend</dt><dd>$0.50 of $5.00 run ceiling</dd>" in running
     assert "today" not in running.lower()
 
 
@@ -507,3 +507,27 @@ def test_job_post_passes_the_confirmation_through(
     assert (submission.resume, submission.top, submission.confirm) == (7, 10, True)
     _post_request(settings, jobs, {"resume": 7, "confirm": "no"}, path=JOBS_PATH)
     assert submit.call_args.args[0].confirm is False
+
+
+def test_home_figures_come_from_one_definition(db_path: Path) -> None:
+    _add_source(db_path)
+    _add_clip(db_path, ClipStatus.CHECKED)
+    with connect(db_path) as db:
+        insert(
+            db,
+            Source(
+                id=8,
+                path="other.mp4",
+                title="Other",
+                niche=Niche.HEALTH,
+                source_allowed=False,
+                allowed_basis=None,
+            ),
+        )
+    _add_clip(db_path, ClipStatus.CHECKED, source=8, clip_id=2)
+    page = _home(db_path)
+    # The unpermitted source needs attention and does not count as awaiting review.
+    assert "<dt>Needs attention</dt><dd>1</dd>" in page
+    assert "<dt>Clips awaiting review</dt><dd>1</dd>" in page
+    assert "Needs attention</span><strong>1</strong>" in page
+    assert "Clips awaiting review</span><strong>1</strong>" in page

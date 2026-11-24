@@ -397,7 +397,8 @@ def test_job_queue_reports_its_live_job_with_run_spend(
         assert live is not None and live.running and live.source_id == 7
         assert live.spend == 0.25 and live.elapsed_s >= 0
         detail = handle_preview(settings, "/dashboard/sources/7", jobs)[2].decode()
-        assert "Elapsed" in detail and "$0.250000" in detail
+        assert "Elapsed" in detail and "$0.25" in detail
+        assert "$0.250000" not in detail
     finally:
         finish.set()
         threads[0].join(timeout=5)

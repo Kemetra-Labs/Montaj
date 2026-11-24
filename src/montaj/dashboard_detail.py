@@ -13,6 +13,7 @@ from montaj.dashboard_parts import (
     LiveJob,
     badge,
     busy_html,
+    format_usd,
     hidden,
     link_button,
     parse_source_id,
@@ -142,7 +143,7 @@ def live_panel_html(live: LiveJob | None, source_id: int | None = None) -> str:
     """
     if live is None or (source_id is not None and live.source_id != source_id):
         return ""
-    spend = f"${live.spend:.6f}" if live.spend is not None else "unavailable"
+    spend = format_usd(live.spend) if live.spend is not None else "unavailable"
     figures = f"<p>Elapsed {live.elapsed_s:.0f} s · Run spend {spend}</p>"
     if live.running:
         heading, body = f"Running: {live.stage}", ""
@@ -180,9 +181,7 @@ def _preview_link(source: "SourceSnapshot") -> str:
 
 def _detail_header(source: "SourceSnapshot", ctx: BoardContext) -> str:
     campaign = f" · Campaign: {escape(ctx.campaign)}" if ctx.campaign else ""
-    spend = (
-        f"Source spend ${source.cost:.6f} of ${ctx.source_ceiling:.2f} source ceiling"
-    )
+    spend = f"Source spend {format_usd(source.cost)} of ${ctx.source_ceiling:.2f} source ceiling"
     return (
         f'<div class="heading"><div><div class="eyebrow">Source #{source.source_id} · {source.niche}{campaign}</div>'
         f'<h1>{escape(source.title)}</h1><p class="secondary">{spend}</p></div>'
@@ -234,7 +233,7 @@ def render_detail(row: "BoardRow", ctx: BoardContext) -> bytes:
 <section class="panel"><div class="section-heading"><h2>Saved checkpoints</h2></div><ol class="steps timeline">{checkpoints}</ol></section></div>
 <div class="side"><section class="panel"><div class="section-heading"><h2>Source information</h2></div>
 <dl class="facts"><div><dt>Permission</dt><dd>{basis}</dd></div><div><dt>Added</dt><dd>{source.added}</dd></div>
-<div><dt>Duration</dt><dd>{source.duration or "Unknown"}</dd></div><div><dt>Est. API cost</dt><dd>${source.cost:.6f}</dd></div></dl></section>
+<div><dt>Duration</dt><dd>{source.duration or "Unknown"}</dd></div><div><dt>Est. API cost</dt><dd>{format_usd(source.cost)}</dd></div></dl></section>
 <section class="panel"><div class="section-heading"><h2>Clips</h2>{_preview_link(source)}</div>{clip_list}</section></div></div>""",
         'aria-current="location"',
         refresh=ctx.running is not None,
