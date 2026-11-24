@@ -107,7 +107,8 @@ def _post_request(
 
 
 def _rows(page: str) -> str:
-    return page.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    """The source cards of the board home."""
+    return page.split('<ol class="cards"', 1)[1].split("</ol>", 1)[0]
 
 
 def _save_rank(db_path: Path, selected: list[int], source: int = 7) -> None:

@@ -18,13 +18,8 @@ from montaj.dashboard_new_job import new_job_html
 from montaj.dashboard_parts import (
     BASE_PATH,
     NEW_JOB_LINK,
-    STATE_LABELS,
     BoardContext,
     LiveJob,
-    badge,
-    busy_html,
-    format_usd,
-    link_button,
     parse_source_id,
     render_board_page,
     render_dashboard_page,
@@ -36,8 +31,8 @@ from montaj.ingest import SourceMetadata, source_dir
 from montaj.models import ClipStatus, Source
 
 if TYPE_CHECKING:
-    from montaj.board import BoardRow, StageCell
-    from montaj.board_view import Summary
+    from montaj.board import BoardRow
+    from montaj.board_view import BoardView
 
 _CHECKPOINTS = (
     ("Transcript", "transcript.json"),
@@ -170,72 +165,6 @@ def _load(settings: Settings, source_id: int | None) -> list[SourceSnapshot]:
     ]
 
 
-def _cell_html(cell: "StageCell") -> str:
-    state = cell.state.value
-    return (
-        f'<li class="cell {state}"><span class="cell-name">{escape(cell.label)}</span>'
-        f'<span class="cell-state">{STATE_LABELS[state]}</span></li>'
-    )
-
-
-def _note(cell: "StageCell") -> str:
-    """A cell reason for the home notes. A pending note names its stage."""
-    if cell.state.value == "pending":
-        return f"{cell.label}: {cell.reason}"
-    return cell.reason
-
-
-def _notes_html(cells: tuple["StageCell", ...]) -> str:
-    """Each distinct failure, blocked or progress note once, in strip order."""
-    reasons = dict.fromkeys(_note(cell) for cell in cells if cell.reason)
-    if not reasons:
-        return ""
-    items = "".join(f"<li>{escape(reason)}</li>" for reason in reasons)
-    return f'<ul class="cell-notes">{items}</ul>'
-
-
-def _resume_html(source_id: int, label: str, ctx: BoardContext) -> str:
-    """Resume or Retry spends API money, so it opens the cost confirmation."""
-    if ctx.running is not None:
-        return busy_html(label, ctx.running, source_id=source_id)
-    return link_button(f"{BASE_PATH}/sources/{source_id}/confirm?stage=batch", label)
-
-
-def _action_html(row: "BoardRow", ctx: BoardContext) -> str:
-    action, source_id = row.action, row.snapshot.source_id
-    if action is None:
-        return ""
-    if action.kind == "resume":
-        return _resume_html(source_id, action.label, ctx) if ctx.operations else ""
-    target = {
-        "review": f"/?source={source_id}",
-        "export": f"/?source={source_id}&amp;ready=1",
-        "fix": f"/?source={source_id}",
-    }[action.kind]
-    return link_button(target, action.label)
-
-
-def _row_html(row: "BoardRow", ctx: BoardContext) -> str:
-    source = row.snapshot
-    strip = "".join(_cell_html(cell) for cell in row.cells)
-    return (
-        f'<tr><th scope="row"><a href="{BASE_PATH}/sources/{source.source_id}">{escape(source.title)}</a>'
-        f'<span class="secondary">#{source.source_id} · {source.niche}</span>'
-        f"{badge(source.state, source.tone)}</th>"
-        f'<td><ol class="strip" aria-label="Stage progress">{strip}</ol>{_notes_html(row.cells)}</td>'
-        f'<td class="numeric optional">{source.clips[ClipStatus.CHECKED]}</td>'
-        f'<td class="numeric optional">{format_usd(source.cost)}</td>'
-        f'<td class="action-cell">{_action_html(row, ctx)}</td></tr>'
-    )
-
-
-def _table_html(scope: str, rows: str) -> str:
-    return f"""<div class="table-wrap" tabindex="0" role="region" aria-label="Source table"><table>
-<caption class="sr-only">{scope}</caption><thead><tr><th scope="col">Source</th><th scope="col">Stages</th>
-<th scope="col" class="numeric optional">Review clips</th><th scope="col" class="numeric optional">Est. API cost</th><th scope="col">Next</th>
-</tr></thead><tbody>{rows}</tbody></table></div>"""
-
-
 def _empty_html(has_sources: bool, ctx: BoardContext) -> str:
     if has_sources:
         return '<div class="empty"><h2>No sources match this view</h2><a href="/dashboard">Show all sources</a></div>'
@@ -255,9 +184,10 @@ def _overview(
     board: list["BoardRow"],
     view: str,
     ctx: BoardContext,
-    summary: "Summary",
+    data: "BoardView",
 ) -> bytes:
     from montaj.board_view import awaiting_review, needs_attention  # board imports us
+    from montaj.dashboard_cards import cards_html
 
     attention = [row for row in board if needs_attention(row)]
     review = [row for row in board if awaiting_review(row)]
@@ -267,7 +197,7 @@ def _overview(
         "review": ("Awaiting review", review),
     }
     view = view if view in views else "all"
-    scope, visible = views[view]
+    visible = views[view][1]
     filters = "".join(
         f'<a href="/dashboard?view={key}" {"aria-current=page" if key == view else ""}>'
         f"{label} <span>{len(items)}</span></a>"
@@ -278,7 +208,7 @@ def _overview(
     except OSError:
         space = "Disk space unavailable"
     results = (
-        _table_html(scope, "".join(_row_html(row, ctx) for row in visible))
+        cards_html(data, board, ctx, [row.snapshot.source_id for row in visible])
         if visible
         else _empty_html(bool(board), ctx)
     )
@@ -287,13 +217,13 @@ def _overview(
         if ctx.notice
         else ""
     )
-    topbar = summary_html(summary)
+    topbar = summary_html(data.summary)
     return render_board_page(
         "Pipeline Control",
         f"""{header_html(ctx.running is not None)}
 {notice}{live_panel_html(ctx.live)}{new_job_html(ctx)}{topbar}
 <div class="pipeline">
-<section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Source queue</h2>
+<section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Active runs</h2>
 <nav class="filters" aria-label="Filter sources">{filters}</nav></div>{results}</section>
 <aside class="side" aria-label="Recent outputs and resources"><section class="panel recent"><div class="section-heading"><h2>Recent outputs</h2></div>
 <p class="empty-copy">Nothing to show yet.</p></section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
@@ -395,13 +325,13 @@ def dashboard_response(
         ceilings.per_run,
     )
     if source_id is None:
-        summary = build_view(
+        data = build_view(
             board,
             source_ceiling=ceilings.per_source,
             run_ceiling=ceilings.per_run,
             run_spend=run_spend,
-        ).summary
-        return 200, html, _overview(settings, board, view, context, summary)
+        )
+        return 200, html, _overview(settings, board, view, context, data)
     if not board:
         return not_found_response()
     return 200, html, render_detail(board[0], context)

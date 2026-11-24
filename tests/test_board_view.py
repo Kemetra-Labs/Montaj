@@ -5,14 +5,19 @@ import pytest
 
 from montaj.board import STRIP, BoardRow, CellState, NextAction, StageCell
 from montaj.board_view import (
+    PAID_STAGE_KEYS,
     STAGES,
     awaiting_review,
     build_view,
+    chip_for,
+    current_stage,
     needs_attention,
+    segment_word,
     stage_segments,
 )
 from montaj.dashboard import SourceSnapshot
 from montaj.models import ClipStatus
+from montaj.stage_jobs import PAID_STAGES
 
 
 def _snapshot(**over: Any) -> SourceSnapshot:
@@ -176,3 +181,108 @@ def test_empty_board() -> None:
     summary = view.summary
     assert (summary.spend, summary.source_count) == (0, 0)
     assert (summary.attention, summary.review_clips) == (0, 0)
+
+
+def _states(
+    *states: CellState, action: NextAction | None = None, **over: Any
+) -> BoardRow:
+    return BoardRow(_snapshot(**over), _cells(*states), action)
+
+
+_P, _D, _R, _F, _B = (
+    CellState.PENDING,
+    CellState.DONE,
+    CellState.RUNNING,
+    CellState.FAILED,
+    CellState.BLOCKED,
+)
+_CHECKED = Counter({ClipStatus.CHECKED: 1})
+_APPROVED = Counter({ClipStatus.APPROVED: 1})
+_RESUME = NextAction("resume", "Resume")
+
+
+@pytest.mark.parametrize(
+    ("row", "chip"),
+    [
+        (
+            _states(_P, _P, _P, _P, _P, _P, _P, allowed=False, clips=_CHECKED),
+            ("Blocked", "warning"),
+        ),
+        (_states(_D, _D, _R, _P, _P, _P, _P, allowed=False), ("Blocked", "warning")),
+        (_states(_D, _D, _R, _P, _P, _P, _P), ("Running", "running")),
+        (_states(_D, _F, _R, _P, _P, _P, _P), ("Running", "running")),
+        (_states(_D, _F, _P, _P, _P, _P, _P), ("Failed", "warning")),
+        (
+            _states(
+                _D,
+                _D,
+                _D,
+                _D,
+                _P,
+                _P,
+                _P,
+                action=NextAction("fix", "Review flagged clips"),
+            ),
+            ("Failed", "warning"),
+        ),
+        (
+            _states(_D, _D, _D, _D, _D, _P, _P, clips=_CHECKED),
+            ("Ready for review", "review"),
+        ),
+        (
+            _states(_D, _D, _D, _D, _D, _D, _P, clips=_APPROVED),
+            ("Ready to export", "review"),
+        ),
+        (
+            _states(_D, _D, _P, _P, _P, _P, _P, action=_RESUME),
+            ("Needs your confirm", "review"),
+        ),
+        (_states(_D, _D, _D, _D, _D, _D, _D), ("Done", "success")),
+        (_states(_P, _P, _P, _P, _P, _P, _P), ("Waiting", "neutral")),
+    ],
+)
+def test_chip_for_each_state(row: BoardRow, chip: tuple[str, str]) -> None:
+    result = chip_for(row, stage_segments(row.cells))
+    assert (result.label, result.tone) == chip
+
+
+def test_current_stage_and_segment_words() -> None:
+    running = stage_segments(_cells(_D, _D, _R, _P, _B, _B, _B))
+    assert current_stage(running) == 2  # first running segment: Candidates
+    idle = stage_segments(_cells(_D, _D, _P, _P, _P, _P, _P))
+    assert current_stage(idle) == 2  # first segment not done
+    finished = stage_segments(_cells(_D, _D, _D, _D, _D, _D, _D))
+    assert current_stage(finished) == 10  # Post log is waiting until MJ-30
+    assert segment_word(idle[2], True) == "next"
+    assert segment_word(idle[3], False) == "waiting"
+    assert [segment_word(s, False) for s in running[:2] + running[6:7]] == [
+        "done",
+        "done",
+        "blocked",
+    ]
+    assert segment_word(running[2], True) == "running"
+    failed = stage_segments(_cells(_D, _F, _P, _P, _P, _P, _P))
+    assert segment_word(failed[1], True) == "failed"
+
+
+def test_paid_stage_keys_match_the_board_stages() -> None:
+    assert PAID_STAGE_KEYS == {stage.value for stage in PAID_STAGES}
+
+
+def test_blocked_card_shows_no_review_count() -> None:
+    blocked = _states(
+        _P,
+        _P,
+        _P,
+        _P,
+        _P,
+        _P,
+        _P,
+        allowed=False,
+        clips=Counter({ClipStatus.CHECKED: 2}),
+    )
+    allowed = _states(
+        _P, _P, _P, _P, _P, _P, _P, clips=Counter({ClipStatus.CHECKED: 2})
+    )
+    cards = build_view([blocked, allowed], source_ceiling=1.0, run_ceiling=1.0).cards
+    assert (cards[0].clips_to_review, cards[1].clips_to_review) == (0, 2)

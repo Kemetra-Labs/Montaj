@@ -27,6 +27,10 @@ STAGES: tuple[tuple[str, str], ...] = (
     ("post_log", "Post log"),
 )
 
+# Stages that spend API money: the values of `stage_jobs.PAID_STAGES`. Candidates
+# and Check run locally.
+PAID_STAGE_KEYS = frozenset({"transcribe", "rank", "draft"})
+
 # The board judges seven groups of these stages (`board.STRIP`). Both stages of a
 # group show the group's state until each stage has its own state of record.
 _CELL_OF = {
@@ -48,6 +52,14 @@ class StageSegment:
 
 
 @dataclass(frozen=True, slots=True)
+class Chip:
+    """A source's state in one or two words. `tone` is a CSS tone name."""
+
+    label: str
+    tone: str
+
+
+@dataclass(frozen=True, slots=True)
 class SourceCard:
     source_id: int
     title: str
@@ -60,6 +72,8 @@ class SourceCard:
     ceiling: float
     left: float
     clips_to_review: int
+    chip: Chip
+    current: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,20 +135,63 @@ def stage_segments(cells: tuple[StageCell, ...]) -> tuple[StageSegment, ...]:
     return tuple(segments)
 
 
+def current_stage(segments: tuple[StageSegment, ...]) -> int:
+    """The stage a card talks about: the first running one, else the first not done."""
+    for index, segment in enumerate(segments):
+        if segment.state is CellState.RUNNING:
+            return index
+    for index, segment in enumerate(segments):
+        if segment.state is not CellState.DONE:
+            return index
+    return len(segments) - 1
+
+
+def segment_word(segment: StageSegment, is_current: bool) -> str:
+    """The word that names a segment's state: never colour alone."""
+    if segment.state is CellState.PENDING:
+        return "next" if is_current else "waiting"
+    return segment.state.value
+
+
+def chip_for(row: BoardRow, segments: tuple[StageSegment, ...]) -> Chip:
+    """The first rule that matches: blocked, running, failed, review, export, confirm."""
+    snapshot, action = row.snapshot, row.action
+    states = {segment.state for segment in segments}
+    if permission_reason(snapshot.allowed, snapshot.basis):
+        return Chip("Blocked", "warning")
+    if CellState.RUNNING in states:
+        return Chip("Running", "running")
+    if CellState.FAILED in states or (action and action.kind == "fix"):
+        return Chip("Failed", "warning")
+    if snapshot.clips[ClipStatus.CHECKED]:
+        return Chip("Ready for review", "review")
+    if snapshot.clips[ClipStatus.APPROVED]:
+        return Chip("Ready to export", "review")
+    if action and action.kind == "resume":
+        return Chip("Needs your confirm", "review")
+    judged = [s for s in segments if _cell_key(s.key) is not None]
+    if all(segment.state is CellState.DONE for segment in judged):
+        return Chip("Done", "success")
+    return Chip("Waiting", "neutral")
+
+
 def _card(row: BoardRow, source_ceiling: float) -> SourceCard:
     snapshot = row.snapshot
+    segments = stage_segments(row.cells)
     return SourceCard(
         snapshot.source_id,
         snapshot.title,
         snapshot.niche,
         snapshot.state,
         snapshot.tone,
-        stage_segments(row.cells),
+        segments,
         row.action,
         snapshot.cost,
         source_ceiling,
         max(source_ceiling - snapshot.cost, 0.0),
-        snapshot.clips[ClipStatus.CHECKED],
+        snapshot.clips[ClipStatus.CHECKED] if awaiting_review(row) else 0,
+        chip_for(row, segments),
+        current_stage(segments),
     )
 
 
