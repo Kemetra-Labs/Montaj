@@ -8,7 +8,6 @@ import pytest
 from montaj import dashboard as dashboard_module
 from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
-from montaj.dashboard import dashboard_response
 from montaj.dashboard_jobs import (
     JOBS_PATH,
     JobQueue,
