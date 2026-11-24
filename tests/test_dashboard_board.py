@@ -35,9 +35,10 @@ def test_home_rows_show_stage_strip_and_next_action(db_path: Path) -> None:
     _imported(db_path)
     page = _home(db_path)
     row = _rows(page)
-    for label in ("Ingest", "Transcribe", "Candidates + rank", "Cut + captions"):
+    for label in ("Ingest", "Transcribe", "Candidates", "Rank", "Cut", "Captions"):
         assert label in row
-    assert "Pending" in row and "Blocked" in row
+    assert "Ingest done" in row and "Transcribe next" in row
+    assert "Draft blocked" in row
     # Resume spends API money, so it opens the cost confirmation first.
     assert "<button" not in row and "<form" not in row
     assert 'href="/dashboard/sources/7/confirm?stage=batch">Resume</a>' in row
@@ -400,8 +401,7 @@ def test_restarted_dashboard_shows_checkpoints_and_resume(db_path: Path) -> None
     assert restarted.running() is None and restarted.live_job() is None
     page = handle_preview(settings, "/dashboard", restarted)[2].decode()
     row = _rows(page)
-    for label in ("Transcribe", "Candidates + rank"):
-        assert f'<li class="cell done"><span class="cell-name">{label}</span>' in row
+    assert "Transcribe done" in row and "Rank done" in row
     assert 'href="/dashboard/sources/7/confirm?stage=batch">Resume</a>' in row
     assert "<button disabled" not in row and "Live job" not in page
     detail = handle_preview(settings, "/dashboard/sources/7", restarted)[2].decode()
@@ -518,7 +518,7 @@ def test_home_figures_come_from_one_definition(db_path: Path) -> None:
 def test_home_grid_and_placeholder(db_path: Path) -> None:
     _add_source(db_path)
     page = _home(db_path)
-    assert 'class="pipeline"' in page and "Source queue" in page
+    assert 'class="pipeline"' in page and "Active runs" in page
     for view in ("all", "attention", "review"):
         assert f"view={view}" in page
     assert "Recent outputs" in page and "Data volume" in page
@@ -540,3 +540,62 @@ def test_home_keeps_the_notice_live_panel_and_new_job_form(db_path: Path) -> Non
     page = body.decode()
     assert "Hello" in page and "Elapsed 12 s" in page
     assert 'id="new-job"' in page and 'http-equiv="refresh"' in page
+
+
+def _three_sources(db_path: Path) -> None:
+    _add_source(db_path)
+    _add_clip(db_path, ClipStatus.CHECKED)
+    with connect(db_path) as db:
+        insert(
+            db,
+            Source(
+                id=8,
+                path="two.mp4",
+                title="Broken",
+                niche=Niche.GAMES,
+                source_allowed=True,
+                speech_status="failed",
+            ),
+        )
+        insert(
+            db,
+            Source(
+                id=9,
+                path="three.mp4",
+                title="Other",
+                niche=Niche.HEALTH,
+                source_allowed=False,
+                allowed_basis=None,
+            ),
+        )
+
+
+def test_three_filters_list_the_right_sources(db_path: Path) -> None:
+    _three_sources(db_path)
+    assert ">All sources <span>3</span>" in _home(db_path)
+    assert ">Needs attention <span>2</span>" in _home(db_path)
+    assert ">Awaiting review <span>1</span>" in _home(db_path)
+    expected = {"": 3, "all": 3, "bogus": 3, "attention": 2, "review": 1}
+    for view, count in expected.items():
+        assert _home(db_path, view=view).count('<li class="card">') == count, view
+    review = _home(db_path, view="review")
+    assert "Interview" in review and "Broken" not in review
+    attention = _home(db_path, view="attention")
+    assert "Broken" in attention and "Other" in attention
+    assert "Interview" not in attention
+
+
+def test_empty_board_and_empty_filter_messages(db_path: Path) -> None:
+    assert "No sources yet" in _home(db_path)
+    _add_source(db_path)
+    page = _home(db_path, view="attention")
+    assert "No sources match this view" in page and "Show all sources" in page
+    assert '<li class="card">' not in page
+
+
+def test_home_has_no_table(db_path: Path) -> None:
+    _add_source(db_path)
+    page = _home(db_path)
+    assert "<table" not in page and 'class="strip"' not in page
+    assert "table-wrap" not in page
+    assert ">Active runs</h2>" in page and 'aria-label="Stage legend"' in page

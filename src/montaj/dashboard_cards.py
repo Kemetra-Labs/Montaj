@@ -41,16 +41,18 @@ def _note(cell: StageCell) -> str:
     return cell.reason
 
 
-def _notes_html(cells: tuple[StageCell, ...]) -> str:
+def _notes_html(cells: tuple[StageCell, ...], said: str = "") -> str:
     """Each distinct failure, blocked or progress note once, in strip order.
 
-    A permission reason is not repeated here: the next-action line says it.
+    A permission reason is not repeated here, and neither is a note that holds
+    the sentence the next-action line already says (`said`).
     """
-    reasons = dict.fromkeys(
+    notes = (
         _note(cell)
         for cell in cells
         if cell.reason and cell.reason not in PERMISSION_REASONS
     )
+    reasons = dict.fromkeys(note for note in notes if not (said and said in note))
     if not reasons:
         return ""
     items = "".join(f"<li>{escape(reason)}</li>" for reason in reasons)
@@ -138,17 +140,18 @@ def _bar_meta(card: SourceCard) -> str:
     return f'<p class="bar-meta"><span>{stage}</span><span>{budget}</span></p>'
 
 
-def _next_html(card: SourceCard, row: BoardRow, ctx: BoardContext) -> str:
-    bold, muted = _sentence(card, row)
+def _next_html(row: BoardRow, ctx: BoardContext, sentence: tuple[str, str]) -> str:
+    bold, muted = sentence
     detail = f'<span class="secondary">{escape(muted)}</span>' if muted else ""
     return (
-        f'<div class="next"><p class="next-line"><strong>{escape(bold)}</strong>'
+        f'<div class="next-step"><p class="next-line"><strong>{escape(bold)}</strong>'
         f'{detail}</p><div class="next-action">{_action_html(row, ctx)}</div></div>'
     )
 
 
 def card_html(card: SourceCard, row: BoardRow, ctx: BoardContext) -> str:
     link = f"{BASE_PATH}/sources/{card.source_id}"
+    sentence = _sentence(card, row)
     return (
         f'<li class="card"><div class="thumb" aria-hidden="true">'
         f"{escape(row.snapshot.duration)}</div>"
@@ -156,8 +159,8 @@ def card_html(card: SourceCard, row: BoardRow, ctx: BoardContext) -> str:
         f'<h3><a href="{link}">{escape(card.title)}</a></h3>'
         f'<span class="secondary">#{card.source_id} · {escape(card.niche)}</span>'
         f"{badge(card.chip.label, card.chip.tone)}</div>"
-        f"{stage_bar_html(card)}{_bar_meta(card)}{_notes_html(row.cells)}"
-        f"{_next_html(card, row, ctx)}</div></li>"
+        f"{stage_bar_html(card)}{_bar_meta(card)}{_notes_html(row.cells, sentence[1])}"
+        f"{_next_html(row, ctx, sentence)}</div></li>"
     )
 
 

@@ -304,3 +304,13 @@ def test_legend() -> None:
     for word in ("Done", "Running", "Next", "Blocked", "Failed", "Waiting"):
         assert word in html
     assert 'aria-label="Stage legend"' in html
+
+
+def test_guidance_is_not_repeated_in_the_notes(db_path: Path) -> None:
+    _clips(db_path, ClipStatus.NEEDS_FIX, 1)
+    assert _cards(db_path).count(FIX_GUIDANCE) == 1
+
+
+def test_ingest_step_is_not_repeated_in_the_notes(db_path: Path) -> None:
+    _waiting(db_path)
+    assert _cards(db_path).count(INGEST_STEP) == 1
