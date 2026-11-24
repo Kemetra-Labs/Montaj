@@ -22,6 +22,7 @@ from montaj.dashboard_parts import (
     LiveJob,
     badge,
     busy_html,
+    format_usd,
     link_button,
     parse_source_id,
     permission_reason,
@@ -221,7 +222,7 @@ def _row_html(row: "BoardRow", ctx: BoardContext) -> str:
         f"{badge(source.state, source.tone)}</th>"
         f'<td><ol class="strip" aria-label="Stage progress">{strip}</ol>{_notes_html(row.cells)}</td>'
         f'<td class="numeric optional">{source.clips[ClipStatus.CHECKED]}</td>'
-        f'<td class="numeric optional">${source.cost:.6f}</td>'
+        f'<td class="numeric optional">{format_usd(source.cost)}</td>'
         f'<td class="action-cell">{_action_html(row, ctx)}</td></tr>'
     )
 
@@ -253,10 +254,10 @@ def _topbar_html(
     live = ""
     if ctx.run_spend is not None:
         spent, ceiling = ctx.run_spend
-        live = f"<div><dt>Run spend</dt><dd>${spent:.6f} of ${ceiling:.2f} run ceiling</dd></div>"
+        live = f"<div><dt>Run spend</dt><dd>{format_usd(spent)} of ${ceiling:.2f} run ceiling</dd></div>"
     return (
         '<dl class="topbar panel" aria-label="Production summary">'
-        f"<div><dt>Est. source API spend</dt><dd>${sum(source.cost for source in sources):.6f}</dd></div>"
+        f"<div><dt>Est. source API spend</dt><dd>{format_usd(sum(source.cost for source in sources))}</dd></div>"
         f"{live}<div><dt>Needs attention</dt><dd>{attention}</dd></div>"
         f"<div><dt>Clips awaiting review</dt><dd>{review_count}</dd></div></dl>"
     )

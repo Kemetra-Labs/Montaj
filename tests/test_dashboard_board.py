@@ -101,11 +101,11 @@ def test_home_top_bar_counts_attention_review_and_spend(db_path: Path) -> None:
     idle = _home(db_path)
     assert "<dt>Needs attention</dt><dd>1</dd>" in idle
     assert "<dt>Clips awaiting review</dt><dd>1</dd>" in idle
-    assert "<dt>Est. source API spend</dt><dd>$0.012345</dd>" in idle
+    assert "<dt>Est. source API spend</dt><dd>$0.01</dd>" in idle
     assert 'href="#new-job">New job</a>' in idle
     assert "Run spend" not in idle
     running = _home(db_path, running=(7, "render"), run_spend=(0.5, 5.0))
-    assert "<dt>Run spend</dt><dd>$0.500000 of $5.00 run ceiling</dd>" in running
+    assert "<dt>Run spend</dt><dd>$0.50 of $5.00 run ceiling</dd>" in running
     assert "today" not in running.lower()
 
 

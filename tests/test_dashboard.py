@@ -115,11 +115,12 @@ def test_source_detail_shows_checkpoints_clip_status_and_cost(db_path: Path) -> 
         b"Imported",
         b"Transcript",
         b"Saved",
-        b"$0.012345",
+        b"$0.01",
         b"Awaiting review",
         b"/?source=1",
     ):
         assert excerpt in body
+    assert b"$0.012345" not in body
     (folder / "video.mp4").unlink()
     assert b"Media missing" in handle_preview(settings, "/dashboard/sources/1")[2]
     assert handle_preview(settings, "/dashboard/sources/99")[0] == 404

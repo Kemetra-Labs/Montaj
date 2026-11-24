@@ -1,5 +1,6 @@
 """Markup primitives and shared state for the dashboard pages."""
 
+import math
 from dataclasses import dataclass
 from html import escape
 
@@ -18,6 +19,22 @@ STATE_LABELS = {
 NOT_PERMITTED_REASON = "Record permission for this source first."
 NO_BASIS_REASON = "Record a permission basis for this source first."
 PERMISSION_REASONS = frozenset({NOT_PERMITTED_REASON, NO_BASIS_REASON})
+
+
+def format_usd(amount: float) -> str:
+    """A dollar amount for the board: cents normally, finer only under one cent.
+
+    A non-zero amount is never shown as free.
+    """
+    if not math.isfinite(amount) or amount < 0:
+        raise ValueError("Cost amount must be a finite, non-negative number.")
+    if amount == 0:
+        return "$0.00"
+    if amount < 0.0005:
+        return "<$0.001"
+    if amount < 0.01:
+        return f"${amount:.3f}"
+    return f"${amount:.2f}"
 
 
 def permission_reason(allowed: bool, basis: str | None) -> str:
