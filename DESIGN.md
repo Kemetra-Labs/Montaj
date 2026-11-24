@@ -53,6 +53,8 @@ Panel radius `.85rem`. Controls `.44rem` to `.5rem`. Tags and chips `.3rem`. Thu
 ## Components
 
 - **Button.** `.button` (surface, stroke border) and `.primary` (accent). Min height 2.2rem, 2.75rem for New run. Hover lifts to `--raised` and a `--muted` border. Disabled drops to 45% opacity and does not react to hover.
+- **Page header.** The `M` brand mark and name, a 1px divider, the page title (h1, 1.6rem), and at the right a Live indicator while a job runs: a dot and the word "Live". No side rail on the board home.
+- **Summary strip.** Four cells in one panel, divided by 1px gaps. Each has a label, a 2rem figure and one note line. Tone changes the note's ink only (warning, review) and always comes with words. Two columns below 52rem.
 - **Chip.** Tinted background plus matching ink, `.3rem` radius, text always present. Running uses accent ink on `--raised`, needs-confirm uses review, blocked and failed use warning.
 - **Stage bar.** 11 equal segments, one per stage. Done is solid accent, running is half accent, next is an accent outline, blocked is a diagonal warning stripe, waiting is `--stroke`. The container carries an `aria-label` listing every stage state, and a legend sits under the list.
 - **Next action.** A bold sentence naming the stage and its estimate, a muted sentence giving the source total after it, and one button. Paid stages use the primary button only when ready.

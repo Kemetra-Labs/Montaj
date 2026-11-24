@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 import pytest
 
 from montaj.config import Settings
+from montaj.dashboard import dashboard_response
 from montaj.dashboard_jobs import (
     JobQueue,
 )
@@ -38,6 +39,26 @@ def _add_source(
                 allowed_basis=basis,
             ),
         )
+
+
+def _home(
+    db_path: Path,
+    *,
+    view: str = "",
+    operations: bool = True,
+    running: tuple[int, str] | None = None,
+    run_spend: tuple[float, float] | None = None,
+) -> str:
+    _, _, body = dashboard_response(
+        Settings(data_dir=db_path.parent),
+        "/dashboard",
+        view,
+        operations=operations,
+        running=running,
+        token="board-token",
+        run_spend=run_spend,
+    )
+    return body.decode()
 
 
 def _capture_threads(monkeypatch: pytest.MonkeyPatch) -> list[Thread]:

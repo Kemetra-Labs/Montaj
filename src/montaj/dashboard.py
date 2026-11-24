@@ -13,6 +13,7 @@ from montaj.budget import Budget
 from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.dashboard_detail import live_panel_html, render_detail
+from montaj.dashboard_header import header_html, summary_html
 from montaj.dashboard_new_job import new_job_html
 from montaj.dashboard_parts import (
     BASE_PATH,
@@ -25,6 +26,7 @@ from montaj.dashboard_parts import (
     format_usd,
     link_button,
     parse_source_id,
+    render_board_page,
     render_dashboard_page,
     source_problem,
 )
@@ -248,21 +250,6 @@ def _empty_html(has_sources: bool, ctx: BoardContext) -> str:
     )
 
 
-def _topbar_html(summary: "Summary") -> str:
-    live = ""
-    if summary.run_spend is not None:
-        live = (
-            f"<div><dt>Run spend</dt><dd>{format_usd(summary.run_spend)} "
-            f"of ${summary.run_ceiling:.2f} run ceiling</dd></div>"
-        )
-    return (
-        '<dl class="topbar panel" aria-label="Production summary">'
-        f"<div><dt>Est. source API spend</dt><dd>{format_usd(summary.spend)}</dd></div>"
-        f"{live}<div><dt>Needs attention</dt><dd>{summary.attention}</dd></div>"
-        f"<div><dt>Clips awaiting review</dt><dd>{summary.review_clips}</dd></div></dl>"
-    )
-
-
 def _overview(
     settings: Settings,
     board: list["BoardRow"],
@@ -295,30 +282,22 @@ def _overview(
         if visible
         else _empty_html(bool(board), ctx)
     )
-    new_job = (
-        f'<a class="button primary" href="{NEW_JOB_LINK}">New job</a>'
-        if ctx.operations
-        else ""
-    )
     notice = (
         f'<p class="notice" role="status">{escape(ctx.notice)}</p>'
         if ctx.notice
         else ""
     )
-    topbar = _topbar_html(summary)
-    return render_dashboard_page(
-        "Operations",
-        f"""<div class="heading"><h1>Production board</h1><div class="toolbar">{new_job}<a class="button" href="/dashboard?view={view}">Refresh</a></div></div>
+    topbar = summary_html(summary)
+    return render_board_page(
+        "Pipeline Control",
+        f"""{header_html(ctx.running is not None)}
 {notice}{live_panel_html(ctx.live)}{new_job_html(ctx)}{topbar}
-<div class="board">
+<div class="pipeline">
 <section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Source queue</h2>
 <nav class="filters" aria-label="Filter sources">{filters}</nav></div>{results}</section>
-<aside class="side" aria-label="Workload"><section class="panel workload"><div class="section-heading"><h2>Workload</h2></div>
-<a class="work-item" href="/dashboard?view=attention"><span><span class="signal warning" aria-hidden="true"></span>Needs attention</span><strong>{summary.attention}</strong></a>
-<a class="work-item" href="/dashboard?view=review"><span><span class="signal review" aria-hidden="true"></span>Clips awaiting review</span><strong>{summary.review_clips}</strong></a>
-</section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
+<aside class="side" aria-label="Recent outputs and resources"><section class="panel recent"><div class="section-heading"><h2>Recent outputs</h2></div>
+<p class="empty-copy">Nothing to show yet.</p></section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
 <dl><div><dt>Data volume</dt><dd>{space}</dd></div></dl></section></aside></div>""",
-        'aria-current="page"',
         refresh=ctx.running is not None,
     )
 

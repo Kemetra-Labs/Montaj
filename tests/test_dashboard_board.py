@@ -14,6 +14,7 @@ from montaj.dashboard_jobs import (
     JobQueue,
     StageSubmission,
 )
+from montaj.dashboard_parts import LiveJob
 from montaj.db import connect, insert
 from montaj.models import ClipStatus, Niche, Source
 from montaj.preview import handle_preview
@@ -22,30 +23,11 @@ from tests.dashboard_helpers import (
     _add_clip,
     _add_source,
     _capture_threads,
+    _home,
     _imported,
     _post_request,
     _rows,
 )
-
-
-def _home(
-    db_path: Path,
-    *,
-    view: str = "",
-    operations: bool = True,
-    running: tuple[int, str] | None = None,
-    run_spend: tuple[float, float] | None = None,
-) -> str:
-    _, _, body = dashboard_response(
-        Settings(data_dir=db_path.parent),
-        "/dashboard",
-        view,
-        operations=operations,
-        running=running,
-        token="board-token",
-        run_spend=run_spend,
-    )
-    return body.decode()
 
 
 def test_home_rows_show_stage_strip_and_next_action(db_path: Path) -> None:
@@ -99,13 +81,15 @@ def test_home_top_bar_counts_attention_review_and_spend(db_path: Path) -> None:
         )
         log_api_call(db, 7, "transcribe", Service.DEEPGRAM, Usage(seconds=12), 0.012345)
     idle = _home(db_path)
-    assert "<dt>Needs attention</dt><dd>1</dd>" in idle
-    assert "<dt>Clips awaiting review</dt><dd>1</dd>" in idle
-    assert "<dt>Est. source API spend</dt><dd>$0.01</dd>" in idle
-    assert 'href="#new-job">New job</a>' in idle
+    assert '>Needs attention</a></dt><dd class="figure">1</dd>' in idle
+    assert '>Clips awaiting review</a></dt><dd class="figure">1</dd>' in idle
+    assert '<dt>Est. API spend</dt><dd class="figure">$0.01</dd>' in idle
     assert "Run spend" not in idle
     running = _home(db_path, running=(7, "render"), run_spend=(0.5, 5.0))
-    assert "<dt>Run spend</dt><dd>$0.50 of $5.00 run ceiling</dd>" in running
+    assert (
+        '<dt>Run spend</dt><dd class="figure">$0.50</dd>'
+        '<dd class="note">of $5.00 run ceiling</dd>'
+    ) in running
     assert "today" not in running.lower()
 
 
@@ -176,7 +160,7 @@ def test_home_refreshes_only_while_running(db_path: Path) -> None:
 def test_empty_board_points_to_new_job(db_path: Path) -> None:
     page = _home(db_path)
     assert "No sources yet" in page
-    assert 'href="#new-job">New job</a>' in page
+    assert 'id="new-job"' in page
     assert "<table" not in page
 
 
@@ -245,7 +229,7 @@ def test_board_has_new_job_form_with_permission_fields(db_path: Path) -> None:
     jobs = JobQueue(Settings(data_dir=db_path.parent))
     page = _board(db_path, jobs)
     assert '<details id="new-job" class="panel job-panel">' in page
-    assert 'href="#new-job">New job</a>' in page
+    assert 'id="new-job"' in page
     form = page.split('<form class="job-form" action="/dashboard/jobs"', 1)[1]
     form = form.split("</form>", 1)[0]
     assert 'method="post"' in form and f'name="token" value="{jobs.token}"' in form
@@ -339,7 +323,7 @@ def test_jobs_path_serves_the_board(db_path: Path) -> None:
     assert served[0] == 200 and served[1].startswith("text/html")
     assert served == board
     page = served[2].decode()
-    assert "Production board" in page and "Hello" not in page
+    assert "Pipeline Control" in page and "Hello" not in page
     detail = handle_preview(settings, "/dashboard/sources/7?notice=Hello", jobs)
     assert b"Hello" not in detail[2]
     assert "Production jobs" not in page
@@ -363,7 +347,7 @@ def test_new_job_error_rerenders_board_with_notice(db_path: Path) -> None:
     message = "Enter an individual YouTube video URL or use the inbox."
     assert f'<p class="notice" role="status">{message}</p>' in page
     assert '<details id="new-job" class="panel job-panel" open>' in page
-    assert "Production board" in page and "Traceback" not in page
+    assert "Pipeline Control" in page and "Traceback" not in page
     assert jobs.snapshot() is None
 
 
@@ -467,7 +451,7 @@ def test_jobs_path_on_a_read_only_server_serves_the_board_without_forms(
         Settings(data_dir=db_path.parent), JOBS_PATH, None
     )
     assert status == 200 and content_type.startswith("text/html")
-    assert b"Production board" in body and b"<form" not in body
+    assert b"Pipeline Control" in body and b"<form" not in body
 
 
 def test_new_job_without_confirm_is_refused_and_starts_nothing(
@@ -527,7 +511,32 @@ def test_home_figures_come_from_one_definition(db_path: Path) -> None:
     _add_clip(db_path, ClipStatus.CHECKED, source=8, clip_id=2)
     page = _home(db_path)
     # The unpermitted source needs attention and does not count as awaiting review.
-    assert "<dt>Needs attention</dt><dd>1</dd>" in page
-    assert "<dt>Clips awaiting review</dt><dd>1</dd>" in page
-    assert "Needs attention</span><strong>1</strong>" in page
-    assert "Clips awaiting review</span><strong>1</strong>" in page
+    assert '>Needs attention</a></dt><dd class="figure">1</dd>' in page
+    assert '>Clips awaiting review</a></dt><dd class="figure">1</dd>' in page
+
+
+def test_home_grid_and_placeholder(db_path: Path) -> None:
+    _add_source(db_path)
+    page = _home(db_path)
+    assert 'class="pipeline"' in page and "Source queue" in page
+    for view in ("all", "attention", "review"):
+        assert f"view={view}" in page
+    assert "Recent outputs" in page and "Data volume" in page
+    assert "Workload" not in page and "work-item" not in page
+
+
+def test_home_keeps_the_notice_live_panel_and_new_job_form(db_path: Path) -> None:
+    _add_source(db_path)
+    _, _, body = dashboard_response(
+        Settings(data_dir=db_path.parent),
+        "/dashboard",
+        "",
+        operations=True,
+        running=(7, "render"),
+        token="board-token",
+        notice="Hello",
+        live=LiveJob(7, "render", True, 12.0, 0.25, "", ""),
+    )
+    page = body.decode()
+    assert "Hello" in page and "Elapsed 12 s" in page
+    assert 'id="new-job"' in page and 'http-equiv="refresh"' in page
