@@ -58,3 +58,18 @@ def summary_html(summary: "Summary") -> str:
         )
         + "</dl>"
     )
+
+
+def header_html(live: bool) -> str:
+    """Brand, page title and, while a job runs, a Live indicator that says so in words."""
+    indicator = (
+        '<p class="live"><span class="live-dot" aria-hidden="true"></span>Live</p>'
+        if live
+        else ""
+    )
+    return (
+        '<header class="page-head">'
+        f'<a class="brand" href="{BASE_PATH}"><span class="brand-mark" aria-hidden="true">M</span>Montaj</a>'
+        '<span class="divider" aria-hidden="true"></span>'
+        f"<h1>Pipeline Control</h1>{indicator}</header>"
+    )

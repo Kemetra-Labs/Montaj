@@ -82,7 +82,6 @@ def test_home_top_bar_counts_attention_review_and_spend(db_path: Path) -> None:
     assert '>Needs attention</a></dt><dd class="figure">1</dd>' in idle
     assert '>Clips awaiting review</a></dt><dd class="figure">1</dd>' in idle
     assert '<dt>Est. API spend</dt><dd class="figure">$0.01</dd>' in idle
-    assert 'href="#new-job">New job</a>' in idle
     assert "Run spend" not in idle
     running = _home(db_path, running=(7, "render"), run_spend=(0.5, 5.0))
     assert (
@@ -159,7 +158,7 @@ def test_home_refreshes_only_while_running(db_path: Path) -> None:
 def test_empty_board_points_to_new_job(db_path: Path) -> None:
     page = _home(db_path)
     assert "No sources yet" in page
-    assert 'href="#new-job">New job</a>' in page
+    assert 'id="new-job"' in page
     assert "<table" not in page
 
 
@@ -228,7 +227,7 @@ def test_board_has_new_job_form_with_permission_fields(db_path: Path) -> None:
     jobs = JobQueue(Settings(data_dir=db_path.parent))
     page = _board(db_path, jobs)
     assert '<details id="new-job" class="panel job-panel">' in page
-    assert 'href="#new-job">New job</a>' in page
+    assert 'id="new-job"' in page
     form = page.split('<form class="job-form" action="/dashboard/jobs"', 1)[1]
     form = form.split("</form>", 1)[0]
     assert 'method="post"' in form and f'name="token" value="{jobs.token}"' in form
@@ -322,7 +321,7 @@ def test_jobs_path_serves_the_board(db_path: Path) -> None:
     assert served[0] == 200 and served[1].startswith("text/html")
     assert served == board
     page = served[2].decode()
-    assert "Production board" in page and "Hello" not in page
+    assert "Pipeline Control" in page and "Hello" not in page
     detail = handle_preview(settings, "/dashboard/sources/7?notice=Hello", jobs)
     assert b"Hello" not in detail[2]
     assert "Production jobs" not in page
@@ -346,7 +345,7 @@ def test_new_job_error_rerenders_board_with_notice(db_path: Path) -> None:
     message = "Enter an individual YouTube video URL or use the inbox."
     assert f'<p class="notice" role="status">{message}</p>' in page
     assert '<details id="new-job" class="panel job-panel" open>' in page
-    assert "Production board" in page and "Traceback" not in page
+    assert "Pipeline Control" in page and "Traceback" not in page
     assert jobs.snapshot() is None
 
 
@@ -450,7 +449,7 @@ def test_jobs_path_on_a_read_only_server_serves_the_board_without_forms(
         Settings(data_dir=db_path.parent), JOBS_PATH, None
     )
     assert status == 200 and content_type.startswith("text/html")
-    assert b"Production board" in body and b"<form" not in body
+    assert b"Pipeline Control" in body and b"<form" not in body
 
 
 def test_new_job_without_confirm_is_refused_and_starts_nothing(

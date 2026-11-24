@@ -36,12 +36,18 @@ code { font-size: .9em; color: var(--ink); }
 .rail nav a { display: flex; justify-content: space-between; align-items: center; gap: .5rem; min-height: 2.6rem; padding: .45rem .75rem; border: 1px solid transparent; border-radius: .46rem; color: var(--muted); text-decoration: none; font-size: .85rem; font-weight: 550; }
 .rail nav a:hover { background: var(--surface); color: var(--ink); }
 .rail nav a[aria-current] { background: var(--raised); border-color: var(--stroke); color: var(--accent); }
-.frame { width: min(100%, 92rem); margin-inline: auto; padding: 2.2rem clamp(1.25rem, 3vw, 3rem) 3.5rem; }
+.frame, .page { width: min(100%, 92rem); margin-inline: auto; padding: 2.2rem clamp(1.25rem, 3vw, 3rem) 3.5rem; }
 .skip { position: fixed; top: .5rem; left: 1rem; z-index: 2; padding: .5rem 1rem; background: var(--surface); transform: translateY(-200%); }
 .skip:focus { transform: none; }
 .heading, .toolbar, .section-heading { display: flex; gap: .75rem; align-items: center; justify-content: space-between; }
 .heading { padding-block: .25rem 1.4rem; border-bottom: 1px solid var(--stroke); margin-bottom: 1.5rem; }
 .toolbar { flex-wrap: wrap; }
+.page-head { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem .9rem; padding-block: .25rem 1.4rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--stroke); }
+.page-head .brand { margin: 0; }
+.page-head h1 { font-size: 1.6rem; line-height: 1.2; font-weight: 670; letter-spacing: -.045em; }
+.divider { width: 1px; height: 1.6rem; background: var(--stroke); }
+.live { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; padding: .2rem .55rem; border-radius: .3rem; background: var(--success-bg); color: var(--success); font-size: .78rem; font-weight: 670; }
+.live-dot { width: .4rem; height: .4rem; border-radius: 50%; background: currentColor; }
 .button { display: inline-flex; gap: .45rem; align-items: center; justify-content: center; min-height: 2.2rem; padding: .35rem .8rem; border: 1px solid var(--stroke); border-radius: .44rem; background: var(--surface); color: var(--ink); font-size: .8rem; font-weight: 670; text-decoration: none; white-space: nowrap; }
 .button:hover { background: var(--raised); border-color: var(--muted); }
 .primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
@@ -171,7 +177,7 @@ tbody th .badge { margin-top: .4rem; }
     .brand { font-size: 1.13rem; gap: .38rem; }
     .brand-mark { width: 1.55rem; font-size: .9rem; }
     .rail nav a { padding: .32rem .45rem; font-size: .74rem; }
-    .frame { padding: 1.4rem .8rem 2rem; }
+    .frame, .page { padding: 1.4rem .8rem 2rem; }
     .heading { align-items: flex-start; }
     .heading:has(.toolbar) { flex-direction: column; }
     h1 { font-size: 1.65rem; }

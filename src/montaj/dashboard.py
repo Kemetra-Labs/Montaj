@@ -13,7 +13,7 @@ from montaj.budget import Budget
 from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.dashboard_detail import live_panel_html, render_detail
-from montaj.dashboard_header import summary_html
+from montaj.dashboard_header import header_html, summary_html
 from montaj.dashboard_new_job import new_job_html
 from montaj.dashboard_parts import (
     BASE_PATH,
@@ -26,6 +26,7 @@ from montaj.dashboard_parts import (
     format_usd,
     link_button,
     parse_source_id,
+    render_board_page,
     render_dashboard_page,
     source_problem,
 )
@@ -281,20 +282,15 @@ def _overview(
         if visible
         else _empty_html(bool(board), ctx)
     )
-    new_job = (
-        f'<a class="button primary" href="{NEW_JOB_LINK}">New job</a>'
-        if ctx.operations
-        else ""
-    )
     notice = (
         f'<p class="notice" role="status">{escape(ctx.notice)}</p>'
         if ctx.notice
         else ""
     )
     topbar = summary_html(summary)
-    return render_dashboard_page(
-        "Operations",
-        f"""<div class="heading"><h1>Production board</h1><div class="toolbar">{new_job}<a class="button" href="/dashboard?view={view}">Refresh</a></div></div>
+    return render_board_page(
+        "Pipeline Control",
+        f"""{header_html(ctx.running is not None)}
 {notice}{live_panel_html(ctx.live)}{new_job_html(ctx)}{topbar}
 <div class="board">
 <section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Source queue</h2>
@@ -304,7 +300,6 @@ def _overview(
 <a class="work-item" href="/dashboard?view=review"><span><span class="signal review" aria-hidden="true"></span>Clips awaiting review</span><strong>{summary.review_clips}</strong></a>
 </section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
 <dl><div><dt>Data volume</dt><dd>{space}</dd></div></dl></section></aside></div>""",
-        'aria-current="page"',
         refresh=ctx.running is not None,
     )
 

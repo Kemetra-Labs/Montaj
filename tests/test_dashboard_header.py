@@ -1,7 +1,9 @@
 import re
 from pathlib import Path
 
+from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
+from montaj.dashboard import dashboard_response
 from montaj.db import connect, insert
 from montaj.models import ClipStatus, Niche, Source
 from tests.dashboard_helpers import _add_clip, _add_source, _home
@@ -107,3 +109,33 @@ def test_strip_escapes_a_tiny_cost(db_path: Path) -> None:
 def test_strip_singular_source(db_path: Path) -> None:
     _add_source(db_path)
     assert "1 source " in _strip(_home(db_path)) + " "
+
+
+def test_home_header(db_path: Path) -> None:
+    _add_source(db_path)
+    page = _home(db_path)
+    assert page.count("<h1") == 1 and "<h1>Pipeline Control</h1>" in page
+    assert "Montaj" in page and "<title>Pipeline Control · Montaj</title>" in page
+    assert 'class="rail"' not in page
+    assert "Production board" not in page and "Refresh" not in page
+
+
+def test_live_indicator_only_while_a_job_runs(db_path: Path) -> None:
+    _add_source(db_path)
+    assert 'class="live"' not in _home(db_path)
+    assert 'class="live"' in _home(db_path, running=(7, "render"))
+
+
+def test_read_only_home_has_no_new_job_panel_or_live_indicator(db_path: Path) -> None:
+    _add_source(db_path)
+    page = _home(db_path, operations=False)
+    assert 'id="new-job"' not in page and 'class="live"' not in page
+    assert 'class="summary' in page
+
+
+def test_other_pages_keep_the_rail(db_path: Path) -> None:
+    _add_source(db_path)
+    settings = Settings(data_dir=db_path.parent)
+    for path in ("/dashboard/sources/7", "/dashboard/sources/99"):
+        _, _, body = dashboard_response(settings, path, "")
+        assert b'class="rail"' in body
