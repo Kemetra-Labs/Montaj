@@ -8,11 +8,13 @@ import pytest
 from montaj import dashboard as dashboard_module
 from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
+from montaj.dashboard import dashboard_response
 from montaj.dashboard_jobs import (
     JOBS_PATH,
     JobQueue,
     StageSubmission,
 )
+from montaj.dashboard_parts import LiveJob
 from montaj.db import connect, insert
 from montaj.models import ClipStatus, Niche, Source
 from montaj.preview import handle_preview
@@ -511,5 +513,30 @@ def test_home_figures_come_from_one_definition(db_path: Path) -> None:
     # The unpermitted source needs attention and does not count as awaiting review.
     assert '>Needs attention</a></dt><dd class="figure">1</dd>' in page
     assert '>Clips awaiting review</a></dt><dd class="figure">1</dd>' in page
-    assert "Needs attention</span><strong>1</strong>" in page
-    assert "Clips awaiting review</span><strong>1</strong>" in page
+
+
+def test_home_grid_and_placeholder(db_path: Path) -> None:
+    _add_source(db_path)
+    page = _home(db_path)
+    assert 'class="pipeline"' in page and "Source queue" in page
+    for view in ("all", "attention", "review"):
+        assert f"view={view}" in page
+    assert "Recent outputs" in page and "Data volume" in page
+    assert "Workload" not in page and "work-item" not in page
+
+
+def test_home_keeps_the_notice_live_panel_and_new_job_form(db_path: Path) -> None:
+    _add_source(db_path)
+    _, _, body = dashboard_response(
+        Settings(data_dir=db_path.parent),
+        "/dashboard",
+        "",
+        operations=True,
+        running=(7, "render"),
+        token="board-token",
+        notice="Hello",
+        live=LiveJob(7, "render", True, 12.0, 0.25, "", ""),
+    )
+    page = body.decode()
+    assert "Hello" in page and "Elapsed 12 s" in page
+    assert 'id="new-job"' in page and 'http-equiv="refresh"' in page

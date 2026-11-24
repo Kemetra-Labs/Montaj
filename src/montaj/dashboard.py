@@ -292,13 +292,11 @@ def _overview(
         "Pipeline Control",
         f"""{header_html(ctx.running is not None)}
 {notice}{live_panel_html(ctx.live)}{new_job_html(ctx)}{topbar}
-<div class="board">
+<div class="pipeline">
 <section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Source queue</h2>
 <nav class="filters" aria-label="Filter sources">{filters}</nav></div>{results}</section>
-<aside class="side" aria-label="Workload"><section class="panel workload"><div class="section-heading"><h2>Workload</h2></div>
-<a class="work-item" href="/dashboard?view=attention"><span><span class="signal warning" aria-hidden="true"></span>Needs attention</span><strong>{summary.attention}</strong></a>
-<a class="work-item" href="/dashboard?view=review"><span><span class="signal review" aria-hidden="true"></span>Clips awaiting review</span><strong>{summary.review_clips}</strong></a>
-</section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
+<aside class="side" aria-label="Recent outputs and resources"><section class="panel recent"><div class="section-heading"><h2>Recent outputs</h2></div>
+<p class="empty-copy">Nothing to show yet.</p></section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
 <dl><div><dt>Data volume</dt><dd>{space}</dd></div></dl></section></aside></div>""",
         refresh=ctx.running is not None,
     )
