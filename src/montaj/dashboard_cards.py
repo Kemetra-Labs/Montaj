@@ -2,7 +2,7 @@
 
 from html import escape
 
-from montaj.board import FIX_GUIDANCE, INGEST_STEP, BoardRow, StageCell
+from montaj.board import FIX_GUIDANCE, INGEST_STEP, BoardRow, CellState, StageCell
 from montaj.board_view import (
     PAID_STAGE_KEYS,
     STAGES,
@@ -41,6 +41,17 @@ def _note(cell: StageCell) -> str:
     return cell.reason
 
 
+def _without(note: str, said: str) -> str:
+    """A note minus the sentence the next-action line says. Its cause stays.
+
+    "Media missing. <said>" keeps "Media missing."; "Ingest: <said>" keeps nothing.
+    """
+    if not said or said not in note:
+        return note
+    rest = note.replace(said, "").strip()
+    return "" if rest.endswith(":") else rest
+
+
 def _notes_html(cells: tuple[StageCell, ...], said: str = "") -> str:
     """Each distinct failure, blocked or progress note once, in strip order.
 
@@ -48,11 +59,11 @@ def _notes_html(cells: tuple[StageCell, ...], said: str = "") -> str:
     the sentence the next-action line already says (`said`).
     """
     notes = (
-        _note(cell)
+        _without(_note(cell), said)
         for cell in cells
         if cell.reason and cell.reason not in PERMISSION_REASONS
     )
-    reasons = dict.fromkeys(note for note in notes if not (said and said in note))
+    reasons = dict.fromkeys(note for note in notes if note)
     if not reasons:
         return ""
     items = "".join(f"<li>{escape(reason)}</li>" for reason in reasons)
@@ -90,11 +101,15 @@ def _sentence(card: SourceCard, row: BoardRow) -> tuple[str, str]:
     reason = permission_reason(snapshot.allowed, snapshot.basis)
     if reason:
         return "Blocked", reason
+    stage = card.segments[card.current].label
+    if card.chip.label == "Running":
+        return f"Running {stage}", "This page refreshes while the job runs."
     if action is None:
+        if card.segments[0].state is CellState.FAILED:
+            return "Ingest failed", INGEST_STEP
         if snapshot.media != "Imported":
             return "Waiting for import", INGEST_STEP
         return "Nothing to run", ""
-    stage = card.segments[card.current].label
     clips = snapshot.clips
     if action.kind == "resume":
         verb = "Retry" if action.label == "Retry" else "Resume from"

@@ -314,3 +314,45 @@ def test_guidance_is_not_repeated_in_the_notes(db_path: Path) -> None:
 def test_ingest_step_is_not_repeated_in_the_notes(db_path: Path) -> None:
     _waiting(db_path)
     assert _cards(db_path).count(INGEST_STEP) == 1
+
+
+def test_failed_ingest_card_keeps_the_cause_and_does_not_say_waiting(
+    db_path: Path,
+) -> None:
+    with connect(db_path) as db:
+        insert(
+            db,
+            Source(
+                id=7,
+                path="input.mp4",
+                title="Interview",
+                niche=Niche.HEALTH,
+                source_allowed=True,
+                allowed_basis="Creator approval",
+                speech_status="failed",
+                failure_note="needs a javascript runtime",
+            ),
+        )
+    html = _cards(db_path)
+    assert "Install Deno" in html
+    assert "<strong>Ingest failed</strong>" in html
+    assert "Waiting for import" not in html
+    assert html.count(INGEST_STEP) == 1
+
+
+def test_missing_media_card_keeps_the_cause(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path)
+    (db_path.parent / "sources/7/video.mp4").unlink()
+    html = _cards(db_path)
+    assert "Media missing." in html
+    assert "<strong>Ingest failed</strong>" in html and "Waiting for import" not in html
+    assert html.count(INGEST_STEP) == 1
+
+
+def test_running_card_says_what_is_running(db_path: Path) -> None:
+    _confirm(db_path)
+    html = _cards(db_path, running=(7, "batch"))
+    assert "<strong>Running Candidates</strong>" in html
+    assert "This page refreshes while the job runs." in html
+    assert "Nothing to run" not in html

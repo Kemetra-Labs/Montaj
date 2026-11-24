@@ -50,6 +50,8 @@ code { font-size: .9em; color: var(--ink); }
 .live-dot { width: .4rem; height: .4rem; border-radius: 50%; background: currentColor; }
 .button { display: inline-flex; gap: .45rem; align-items: center; justify-content: center; min-height: 2.2rem; padding: .35rem .8rem; border: 1px solid var(--stroke); border-radius: .44rem; background: var(--surface); color: var(--ink); font-size: .8rem; font-weight: 670; text-decoration: none; white-space: nowrap; }
 .button:hover { background: var(--raised); border-color: var(--muted); }
+.button:disabled { opacity: .45; cursor: not-allowed; }
+.button:disabled:hover { background: var(--surface); border-color: var(--stroke); }
 .primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
 .primary:hover { background: oklch(93% .12 126); }
 .job-panel { display: grid; gap: .8rem; margin-block: 1rem; padding: 1rem; }

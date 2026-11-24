@@ -57,7 +57,12 @@ def test_overview_uses_saved_sources_and_filters_attention(db_path: Path) -> Non
     assert status == 200 and "text/html" in content_type
     assert b'href="/dashboard/style.css"' in body
     css_status, css_type, css = handle_preview(settings, "/dashboard/style.css")
-    assert css_status == 200 and "text/css" in css_type and b".stage-bar" in css
+    assert (
+        css_status == 200
+        and "text/css" in css_type
+        and b".stage-bar" in css
+        and b".button:disabled" in css
+    )
     assert b"&lt;Interview&gt;" in body
     assert b"/dashboard/sources/1" in body
     assert b"Needs attention" in body
