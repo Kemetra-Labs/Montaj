@@ -22,30 +22,11 @@ from tests.dashboard_helpers import (
     _add_clip,
     _add_source,
     _capture_threads,
+    _home,
     _imported,
     _post_request,
     _rows,
 )
-
-
-def _home(
-    db_path: Path,
-    *,
-    view: str = "",
-    operations: bool = True,
-    running: tuple[int, str] | None = None,
-    run_spend: tuple[float, float] | None = None,
-) -> str:
-    _, _, body = dashboard_response(
-        Settings(data_dir=db_path.parent),
-        "/dashboard",
-        view,
-        operations=operations,
-        running=running,
-        token="board-token",
-        run_spend=run_spend,
-    )
-    return body.decode()
 
 
 def test_home_rows_show_stage_strip_and_next_action(db_path: Path) -> None:
@@ -99,13 +80,16 @@ def test_home_top_bar_counts_attention_review_and_spend(db_path: Path) -> None:
         )
         log_api_call(db, 7, "transcribe", Service.DEEPGRAM, Usage(seconds=12), 0.012345)
     idle = _home(db_path)
-    assert "<dt>Needs attention</dt><dd>1</dd>" in idle
-    assert "<dt>Clips awaiting review</dt><dd>1</dd>" in idle
-    assert "<dt>Est. source API spend</dt><dd>$0.01</dd>" in idle
+    assert '>Needs attention</a></dt><dd class="figure">1</dd>' in idle
+    assert '>Clips awaiting review</a></dt><dd class="figure">1</dd>' in idle
+    assert '<dt>Est. API spend</dt><dd class="figure">$0.01</dd>' in idle
     assert 'href="#new-job">New job</a>' in idle
     assert "Run spend" not in idle
     running = _home(db_path, running=(7, "render"), run_spend=(0.5, 5.0))
-    assert "<dt>Run spend</dt><dd>$0.50 of $5.00 run ceiling</dd>" in running
+    assert (
+        '<dt>Run spend</dt><dd class="figure">$0.50</dd>'
+        '<dd class="note">of $5.00 run ceiling</dd>'
+    ) in running
     assert "today" not in running.lower()
 
 
@@ -527,7 +511,7 @@ def test_home_figures_come_from_one_definition(db_path: Path) -> None:
     _add_clip(db_path, ClipStatus.CHECKED, source=8, clip_id=2)
     page = _home(db_path)
     # The unpermitted source needs attention and does not count as awaiting review.
-    assert "<dt>Needs attention</dt><dd>1</dd>" in page
-    assert "<dt>Clips awaiting review</dt><dd>1</dd>" in page
+    assert '>Needs attention</a></dt><dd class="figure">1</dd>' in page
+    assert '>Clips awaiting review</a></dt><dd class="figure">1</dd>' in page
     assert "Needs attention</span><strong>1</strong>" in page
     assert "Clips awaiting review</span><strong>1</strong>" in page

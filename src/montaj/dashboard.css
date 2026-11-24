@@ -103,10 +103,15 @@ tbody .optional { color: var(--muted); }
 .resources dl > div, .facts div { display: grid; gap: .18rem; padding: .72rem 1.05rem; border-top: 1px solid var(--stroke); }
 .resources dt, .facts dt { color: var(--muted); font-size: .74rem; }
 .resources dd, .facts dd { color: var(--ink); font-size: .9rem; font-weight: 620; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.topbar { display: grid; grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); margin-bottom: 1rem; overflow: hidden; }
-.topbar > div { display: grid; gap: .18rem; padding: .72rem 1.05rem; }
-.topbar dt { color: var(--muted); font-size: .74rem; }
-.topbar dd { font-size: 1.04rem; font-weight: 640; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-bottom: 1rem; overflow: hidden; background: var(--stroke); }
+.stat { display: grid; align-content: start; gap: .25rem; padding: .95rem 1.05rem; background: var(--surface); }
+.stat dt { color: var(--muted); font-size: .74rem; font-weight: 560; }
+.stat dt a { color: var(--ink); text-underline-offset: .2em; }
+.stat dt a:hover { color: var(--accent); }
+.figure { font-size: 2rem; line-height: 1.15; font-weight: 650; letter-spacing: -.04em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.note { color: var(--muted); font-size: .76rem; }
+.stat[data-tone="warning"] .note { color: var(--warning); }
+.stat[data-tone="review"] .note { color: var(--review); }
 .strip { display: grid; grid-template-columns: repeat(7, minmax(4.4rem, 1fr)); gap: .3rem; margin: 0; padding: 0; list-style: none; min-width: 31rem; }
 .cell { display: grid; gap: .08rem; padding: .3rem .4rem; border: 1px solid var(--stroke); border-radius: .34rem; background: var(--raised); color: var(--muted); font-size: .7rem; line-height: 1.25; }
 .cell-name { font-weight: 560; overflow-wrap: anywhere; }
@@ -149,6 +154,9 @@ tbody th .badge { margin-top: .4rem; }
 @media (max-width: 74rem) {
     .board { grid-template-columns: minmax(0, 1fr); }
     .board:not(.detail) > .side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 52rem) {
+    .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 58rem) {
     .shell { grid-template-columns: minmax(0, 1fr); }

@@ -13,6 +13,7 @@ from montaj.budget import Budget
 from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.dashboard_detail import live_panel_html, render_detail
+from montaj.dashboard_header import summary_html
 from montaj.dashboard_new_job import new_job_html
 from montaj.dashboard_parts import (
     BASE_PATH,
@@ -248,21 +249,6 @@ def _empty_html(has_sources: bool, ctx: BoardContext) -> str:
     )
 
 
-def _topbar_html(summary: "Summary") -> str:
-    live = ""
-    if summary.run_spend is not None:
-        live = (
-            f"<div><dt>Run spend</dt><dd>{format_usd(summary.run_spend)} "
-            f"of ${summary.run_ceiling:.2f} run ceiling</dd></div>"
-        )
-    return (
-        '<dl class="topbar panel" aria-label="Production summary">'
-        f"<div><dt>Est. source API spend</dt><dd>{format_usd(summary.spend)}</dd></div>"
-        f"{live}<div><dt>Needs attention</dt><dd>{summary.attention}</dd></div>"
-        f"<div><dt>Clips awaiting review</dt><dd>{summary.review_clips}</dd></div></dl>"
-    )
-
-
 def _overview(
     settings: Settings,
     board: list["BoardRow"],
@@ -305,7 +291,7 @@ def _overview(
         if ctx.notice
         else ""
     )
-    topbar = _topbar_html(summary)
+    topbar = summary_html(summary)
     return render_dashboard_page(
         "Operations",
         f"""<div class="heading"><h1>Production board</h1><div class="toolbar">{new_job}<a class="button" href="/dashboard?view={view}">Refresh</a></div></div>
