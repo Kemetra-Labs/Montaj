@@ -25,7 +25,6 @@ from montaj.dashboard_parts import (
     format_usd,
     link_button,
     parse_source_id,
-    permission_reason,
     render_dashboard_page,
     source_problem,
 )
@@ -36,6 +35,7 @@ from montaj.models import ClipStatus, Source
 
 if TYPE_CHECKING:
     from montaj.board import BoardRow, StageCell
+    from montaj.board_view import Summary
 
 _CHECKPOINTS = (
     ("Transcript", "transcript.json"),
@@ -248,31 +248,32 @@ def _empty_html(has_sources: bool, ctx: BoardContext) -> str:
     )
 
 
-def _topbar_html(
-    sources: list[SourceSnapshot], review_count: int, attention: int, ctx: BoardContext
-) -> str:
+def _topbar_html(summary: "Summary") -> str:
     live = ""
-    if ctx.run_spend is not None:
-        spent, ceiling = ctx.run_spend
-        live = f"<div><dt>Run spend</dt><dd>{format_usd(spent)} of ${ceiling:.2f} run ceiling</dd></div>"
+    if summary.run_spend is not None:
+        live = (
+            f"<div><dt>Run spend</dt><dd>{format_usd(summary.run_spend)} "
+            f"of ${summary.run_ceiling:.2f} run ceiling</dd></div>"
+        )
     return (
         '<dl class="topbar panel" aria-label="Production summary">'
-        f"<div><dt>Est. source API spend</dt><dd>{format_usd(sum(source.cost for source in sources))}</dd></div>"
-        f"{live}<div><dt>Needs attention</dt><dd>{attention}</dd></div>"
-        f"<div><dt>Clips awaiting review</dt><dd>{review_count}</dd></div></dl>"
+        f"<div><dt>Est. source API spend</dt><dd>{format_usd(summary.spend)}</dd></div>"
+        f"{live}<div><dt>Needs attention</dt><dd>{summary.attention}</dd></div>"
+        f"<div><dt>Clips awaiting review</dt><dd>{summary.review_clips}</dd></div></dl>"
     )
 
 
 def _overview(
-    settings: Settings, board: list["BoardRow"], view: str, ctx: BoardContext
+    settings: Settings,
+    board: list["BoardRow"],
+    view: str,
+    ctx: BoardContext,
+    summary: "Summary",
 ) -> bytes:
-    attention = [row for row in board if row.snapshot.tone == "warning"]
-    review = [
-        row
-        for row in board
-        if not permission_reason(row.snapshot.allowed, row.snapshot.basis)
-        and row.snapshot.clips[ClipStatus.CHECKED]
-    ]
+    from montaj.board_view import awaiting_review, needs_attention  # board imports us
+
+    attention = [row for row in board if needs_attention(row)]
+    review = [row for row in board if awaiting_review(row)]
     views = {
         "all": ("All sources", board),
         "attention": ("Needs attention", attention),
@@ -280,7 +281,6 @@ def _overview(
     }
     view = view if view in views else "all"
     scope, visible = views[view]
-    review_count = sum(row.snapshot.clips[ClipStatus.CHECKED] for row in review)
     filters = "".join(
         f'<a href="/dashboard?view={key}" {"aria-current=page" if key == view else ""}>'
         f"{label} <span>{len(items)}</span></a>"
@@ -305,9 +305,7 @@ def _overview(
         if ctx.notice
         else ""
     )
-    topbar = _topbar_html(
-        [row.snapshot for row in board], review_count, len(attention), ctx
-    )
+    topbar = _topbar_html(summary)
     return render_dashboard_page(
         "Operations",
         f"""<div class="heading"><h1>Production board</h1><div class="toolbar">{new_job}<a class="button" href="/dashboard?view={view}">Refresh</a></div></div>
@@ -316,8 +314,8 @@ def _overview(
 <section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Source queue</h2>
 <nav class="filters" aria-label="Filter sources">{filters}</nav></div>{results}</section>
 <aside class="side" aria-label="Workload"><section class="panel workload"><div class="section-heading"><h2>Workload</h2></div>
-<a class="work-item" href="/dashboard?view=attention"><span><span class="signal warning" aria-hidden="true"></span>Needs attention</span><strong>{len(attention)}</strong></a>
-<a class="work-item" href="/dashboard?view=review"><span><span class="signal review" aria-hidden="true"></span>Clips awaiting review</span><strong>{review_count}</strong></a>
+<a class="work-item" href="/dashboard?view=attention"><span><span class="signal warning" aria-hidden="true"></span>Needs attention</span><strong>{summary.attention}</strong></a>
+<a class="work-item" href="/dashboard?view=review"><span><span class="signal review" aria-hidden="true"></span>Clips awaiting review</span><strong>{summary.review_clips}</strong></a>
 </section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
 <dl><div><dt>Data volume</dt><dd>{space}</dd></div></dl></section></aside></div>""",
         'aria-current="page"',
@@ -388,6 +386,7 @@ def dashboard_response(
     choices: tuple[tuple[int, str], ...] = ()
     try:
         from montaj.board import build_rows  # board imports this module
+        from montaj.board_view import build_view
 
         board = build_rows(settings, running=running, source_id=source_id)
         if source_id is not None:
@@ -417,7 +416,13 @@ def dashboard_response(
         ceilings.per_run,
     )
     if source_id is None:
-        return 200, html, _overview(settings, board, view, context)
+        summary = build_view(
+            board,
+            source_ceiling=ceilings.per_source,
+            run_ceiling=ceilings.per_run,
+            run_spend=run_spend,
+        ).summary
+        return 200, html, _overview(settings, board, view, context, summary)
     if not board:
         return not_found_response()
     return 200, html, render_detail(board[0], context)

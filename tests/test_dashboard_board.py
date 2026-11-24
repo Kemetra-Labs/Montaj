@@ -507,3 +507,27 @@ def test_job_post_passes_the_confirmation_through(
     assert (submission.resume, submission.top, submission.confirm) == (7, 10, True)
     _post_request(settings, jobs, {"resume": 7, "confirm": "no"}, path=JOBS_PATH)
     assert submit.call_args.args[0].confirm is False
+
+
+def test_home_figures_come_from_one_definition(db_path: Path) -> None:
+    _add_source(db_path)
+    _add_clip(db_path, ClipStatus.CHECKED)
+    with connect(db_path) as db:
+        insert(
+            db,
+            Source(
+                id=8,
+                path="other.mp4",
+                title="Other",
+                niche=Niche.HEALTH,
+                source_allowed=False,
+                allowed_basis=None,
+            ),
+        )
+    _add_clip(db_path, ClipStatus.CHECKED, source=8, clip_id=2)
+    page = _home(db_path)
+    # The unpermitted source needs attention and does not count as awaiting review.
+    assert "<dt>Needs attention</dt><dd>1</dd>" in page
+    assert "<dt>Clips awaiting review</dt><dd>1</dd>" in page
+    assert "Needs attention</span><strong>1</strong>" in page
+    assert "Clips awaiting review</span><strong>1</strong>" in page
