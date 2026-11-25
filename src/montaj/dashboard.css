@@ -42,8 +42,8 @@ code { font-size: .9em; color: var(--ink); }
 .confirm { display: grid; gap: .9rem; padding: 1rem 1.05rem; }
 .confirm-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
 .confirm-actions .job-form { display: contents; }
-.source-card { grid-template-columns: minmax(0, 1fr); gap: .35rem; margin-bottom: 1rem; border: 1px solid var(--stroke); border-radius: var(--radius); background: var(--surface); }
-.source-card:hover { background: var(--surface); }
+.card.source-card { grid-template-columns: minmax(0, 1fr); gap: .35rem; margin-bottom: 1rem; border: 1px solid var(--stroke); border-radius: var(--radius); background: var(--surface); }
+.card.source-card:hover { background: var(--surface); }
 .source-card h1 { font-size: 1.6rem; line-height: 1.2; letter-spacing: -.045em; }
 .source-card .secondary { margin: 0; overflow-wrap: anywhere; }
 .source-card .refresh { justify-self: start; }
