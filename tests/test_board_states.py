@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from montaj.board_view import LockInfo, job_problem_note, source_locks
 from montaj.config import Settings
 from montaj.dashboard_parts import source_problem
 
-_GENERIC = "The job stopped. See the dashboard terminal for the details."
+_GENERIC = "The job stopped. The details are in montaj.log in the logs folder of the data directory."
 _RUN_STOP = "The run ceiling was reached before the next paid call."
 _SOURCE_STOP = "The source ceiling was reached before the next paid call."
 
@@ -132,6 +133,9 @@ def test_job_problem_note_keeps_montaj_sentences(problem: str) -> None:
         ("C:\\data\\sources\\7\\video.mp4 not found", _GENERIC),
         ("Traceback (most recent call last)", _GENERIC),
         ("<b>x</b>", _GENERIC),
+        ("Failed to fetch https://example.com/v?id=1", _GENERIC),
+        ("first line\nsecond line", _GENERIC),
+        ("x" * 301, _GENERIC),
         ("This source is already being processed by <b> since now.", _GENERIC),
         ("", ""),
         ("   ", ""),
@@ -139,3 +143,41 @@ def test_job_problem_note_keeps_montaj_sentences(problem: str) -> None:
 )
 def test_job_problem_note_rewords_the_rest(problem: str, note: str) -> None:
     assert job_problem_note(problem) == note
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "Record a permission basis on the source before running a stage.",
+        "Set ANTHROPIC_API_KEY before requesting Claude output.",
+        "Run rank first.",
+        "Ranked clip 3 is missing. Rerun rank.",
+    ],
+)
+def test_job_problem_note_keeps_a_plain_montaj_sentence(problem: str) -> None:
+    assert job_problem_note(problem) == problem
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ValueError("Record a permission basis on the source before running a stage."),
+        media.MediaError("ffmpeg exited with status 1"),
+    ],
+)
+def test_every_job_problem_is_logged(
+    exc: Exception, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(logging.getLogger("montaj"), "propagate", True)
+    problem = dashboard_jobs._job_problem(exc)
+    assert job_problem_note(problem) == str(exc)
+    assert str(exc) in caplog.text
+
+
+def test_the_dashboards_own_import_is_not_locked(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path)
+    _holder(settings, 7, json.dumps({"command": "ingest", "started": "x"}))
+    assert source_locks(settings, [7], (0, "batch")) == {}
+    assert 7 in source_locks(settings, [7], None)
+    _holder(settings, 7, json.dumps({"command": "pipeline", "started": "x"}))
+    assert 7 in source_locks(settings, [7], (0, "batch"))

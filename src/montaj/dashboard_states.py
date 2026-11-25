@@ -6,7 +6,12 @@ Words first: every state says what happened and what to do, never colour alone.
 from datetime import datetime
 from html import escape
 
-from montaj.board_view import LockInfo, SourceCard, job_problem_note
+from montaj.board_view import (
+    SOURCE_CEILING_STOP,
+    LockInfo,
+    SourceCard,
+    job_problem_note,
+)
 from montaj.dashboard_parts import (
     BASE_PATH,
     BoardContext,
@@ -47,6 +52,14 @@ def lock_text(lock: LockInfo, now: datetime) -> str:
     return f"{holder} {lock_age_text(lock.started, now)}"
 
 
+def stale_lock_text(source_id: int) -> str:
+    """How to clear a lock left by a stopped process. The board never clears it."""
+    return (
+        "If no Montaj command is running, the lock is stale: delete "
+        f"sources/{source_id}/.lock-holder in the data directory, then refresh."
+    )
+
+
 def over_budget_text(card: SourceCard) -> str:
     ceiling = format_usd(card.ceiling)
     return f"Over its {ceiling} source ceiling. Paid stages are off for this source."
@@ -84,6 +97,8 @@ def retry_html(
     if not ctx.operations or (card is not None and card.chip.label == "Blocked"):
         return ""
     reason = withheld_reason(card) if card is not None else ""
+    if not reason and job_problem_note(live.problem) == SOURCE_CEILING_STOP:
+        reason = OVER_BUDGET_REASON  # the same call would stop again
     if reason:
         return disabled_html("Retry", reason, source_id)
     if ctx.running is not None:
@@ -91,18 +106,29 @@ def retry_html(
     return link_button(f"{BASE_PATH}/sources/{source_id}/confirm?stage=batch", "Retry")
 
 
-def failed_job_html(live: LiveJob, titles: dict[int, str], retry: str) -> str:
-    """The latest job stopped with a problem: what, where, and what is kept."""
+def failed_job_html(
+    live: LiveJob, titles: dict[int, str], retry: str, review: bool = False
+) -> str:
+    """The latest job stopped with a problem: what, where, and what is kept.
+
+    `review` adds the review link when the source has checked clips ready.
+    """
     title = titles.get(live.source_id) if live.source_id is not None else None
     where = escape(title) if title else "a new import"
     spend = format_usd(live.spend) if live.spend is not None else "unavailable"
     note = job_problem_note(live.problem)
+    summary = f"<p>{escape(live.summary)}</p>" if live.summary.strip() else ""
+    link = (
+        f'<p><a href="/?source={live.source_id}&amp;ready=1">Review clips</a></p>'
+        if review and live.source_id is not None
+        else ""
+    )
     return (
         '<section class="panel failed-job" aria-label="Failed job">'
         "<h2>Job failed</h2>"
         f"<p><strong>Stopped during {escape(live.stage)}</strong> on {where}.</p>"
-        f"<p>{escape(note)}</p><p>{_KEPT}</p>"
-        f'<p class="secondary">Run spend {escape(spend)}</p>'
+        f"{summary}<p>{escape(note)}</p><p>{_KEPT}</p>"
+        f'<p class="secondary">Run spend {escape(spend)}</p>{link}'
         f'<div class="next-action">{retry}</div></section>'
     )
 

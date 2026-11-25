@@ -189,7 +189,9 @@ def _job_html(board: list["BoardRow"], ctx: BoardContext, data: "BoardView") -> 
         return live_panel_html(live)
     titles = {row.snapshot.source_id: row.snapshot.title for row in board}
     card = next((c for c in data.cards if c.source_id == live.source_id), None)
-    return failed_job_html(live, titles, retry_html(live, titles, card, ctx))
+    review = card is not None and card.clips_to_review > 0
+    retry = retry_html(live, titles, card, ctx)
+    return failed_job_html(live, titles, retry, review)
 
 
 def _overview(

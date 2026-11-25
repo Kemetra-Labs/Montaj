@@ -25,6 +25,7 @@ from montaj.dashboard_states import (
     disabled_html,
     lock_text,
     over_budget_text,
+    stale_lock_text,
     withheld_reason,
 )
 from montaj.models import ClipStatus
@@ -176,7 +177,10 @@ def _state_html(card: SourceCard, now: datetime) -> str:
         notes.append(lock_text(card.lock, now))
     if card.over_budget:
         notes.append(over_budget_text(card))
-    return "".join(f'<p class="state-note">{escape(note)}</p>' for note in notes)
+    html = "".join(f'<p class="state-note">{escape(note)}</p>' for note in notes)
+    if card.lock is not None:
+        html += f'<p class="secondary">{escape(stale_lock_text(card.source_id))}</p>'
+    return html
 
 
 def _next_html(

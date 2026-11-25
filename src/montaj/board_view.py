@@ -10,17 +10,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from montaj import dashboard_jobs
 from montaj.board import BoardRow, CellState, NextAction, StageCell
 from montaj.config import Settings
-from montaj.dashboard_parts import (
-    NOT_PERMITTED_REASON,
-    permission_reason,
-    source_problem,
-)
+from montaj.dashboard_parts import NOT_PERMITTED_REASON, permission_reason
 from montaj.db import connect
-from montaj.job import NO_MORE_CANDIDATES
-from montaj.media import BUSY_MESSAGE
 from montaj.models import CheckResult, Clip, ClipStatus
 
 STAGES: tuple[tuple[str, str], ...] = (
@@ -433,9 +426,11 @@ def source_locks(
 ) -> dict[int, LockInfo]:
     """Sources whose `.lock-holder` file exists. Reads only; never takes the lock.
 
-    The source of the dashboard's own running job is Running, not Locked.
+    The source of the dashboard's own running job is Running, not Locked. While
+    the dashboard imports (source 0), the new source's ingest lock is its own too.
     """
     skip = running[0] if running else None
+    importing = skip == 0
     root = settings.data_dir.resolve()
     locks: dict[int, LockInfo] = {}
     for source_id in source_ids:
@@ -443,56 +438,43 @@ def source_locks(
             continue
         path = settings.data_dir / "sources" / str(source_id) / ".lock-holder"
         lock = _read_lock(path, root)
-        if lock is not None:
+        if lock is not None and not (importing and lock.command == "ingest"):
             locks[source_id] = lock
     return locks
 
 
-# Sentences Montaj itself stores as a job problem. Anything else may hold a path,
-# a trace or tool output, so it is replaced, never shown.
-_KNOWN_PROBLEMS = frozenset(
-    {
-        dashboard_jobs._UNEXPECTED,
-        dashboard_jobs._FILE_PROBLEM,
-        dashboard_jobs._MEDIA_PROBLEM,
-        NO_MORE_CANDIDATES,
-        BUSY_MESSAGE,
-        *(
-            sentence
-            for status, note in (
-                ("language_mismatch", None),
-                ("no_usable_speech", None),
-                ("failed", "javascript runtime"),
-                ("failed", "ejs solver"),
-                ("failed", "format available"),
-                ("failed", None),
-            )
-            if (sentence := source_problem(status, note))
-        ),
-    }
-)
-# `media._busy_message` names the holder and when it started.
-_BUSY_BY = re.compile(
-    r"This source is already being processed by [a-z][a-z0-9_ -]{0,39} "
-    r"since [0-9T:+.-]{10,40}\."
-)
+# A stored job problem is shown as written only when it is one plain sentence:
+# one short line with no path, URL, markup or trace. Anything else may hold tool
+# output, so it is replaced; `dashboard_jobs` logs every problem in full.
+_PLAIN_LIMIT = 300
+_NOT_PLAIN = ("/", "\\", "<", ">")
 # `budget` raises "<stage>: per-run budget ceiling $…", or per-source.
 _BUDGET_STOP = re.compile(r"[a-z_ -]{1,40}: (per-run|per-source) budget ceiling \$")
-_BUDGET_NOTES = {
-    "per-run": "The run ceiling was reached before the next paid call.",
-    "per-source": "The source ceiling was reached before the next paid call.",
-}
-_JOB_STOPPED = "The job stopped. See the dashboard terminal for the details."
+RUN_CEILING_STOP = "The run ceiling was reached before the next paid call."
+SOURCE_CEILING_STOP = "The source ceiling was reached before the next paid call."
+_BUDGET_NOTES = {"per-run": RUN_CEILING_STOP, "per-source": SOURCE_CEILING_STOP}
+_JOB_STOPPED = (
+    "The job stopped. The details are in montaj.log in the logs folder of the "
+    "data directory."
+)
+
+
+def _plain(text: str) -> bool:
+    return (
+        len(text) <= _PLAIN_LIMIT
+        and "\n" not in text
+        and "\r" not in text
+        and not text.startswith("Traceback")
+        and not any(mark in text for mark in _NOT_PLAIN)
+    )
 
 
 def job_problem_note(problem: str) -> str:
-    """Fixed wording for a stored job problem: Montaj's own sentences, else one."""
+    """A stored job problem fit for the page: a plain sentence, else fixed wording."""
     text = problem.strip()
     if not text:
         return ""
-    if text in _KNOWN_PROBLEMS or _BUSY_BY.fullmatch(text):
-        return text
     budget = _BUDGET_STOP.match(text)
     if budget:
         return _BUDGET_NOTES[budget.group(1)]
-    return _JOB_STOPPED
+    return text if _plain(text) else _JOB_STOPPED

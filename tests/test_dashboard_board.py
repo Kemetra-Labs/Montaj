@@ -424,8 +424,7 @@ def test_finished_job_with_a_problem_has_no_review_link(
     threads[0].join(timeout=5)
     home = _board(db_path, jobs, "/dashboard")
     assert "failed-job" in home and ">Review clips</a>" not in home
-    assert "One clip skipped." not in home
-    assert "The job stopped. See the dashboard terminal for the details." in home
+    assert "One clip skipped." in home  # a plain sentence is shown as written
     page = _board(db_path, jobs, "/dashboard/sources/7")
     assert "One clip skipped." in page and ">Review clips</a>" not in page
 
@@ -782,7 +781,10 @@ def test_home_shows_the_failed_job(db_path: Path) -> None:
     page = _home(db_path, live=live)
     assert 'class="panel failed-job"' in page and "Latest job" not in page
     assert "y.mp4" not in page
-    assert "The job stopped. See the dashboard terminal for the details." in page
+    assert (
+        "The job stopped. The details are in montaj.log in the logs folder of the data directory."
+        in page
+    )
     assert 'href="/dashboard/sources/7/confirm?stage=batch">Retry</a>' in page
 
 
@@ -813,3 +815,10 @@ def test_empty_board_opens_the_form(db_path: Path) -> None:
 def test_board_with_sources_keeps_the_form_closed(db_path: Path) -> None:
     _add_source(db_path)
     assert '<details id="new-job" class="panel job-panel">' in _home(db_path)
+
+
+def test_home_import_does_not_lock_its_own_source(db_path: Path) -> None:
+    _add_source(db_path)
+    _hold(db_path, "ingest")
+    page = _home(db_path, running=(0, "batch"))
+    assert ">Locked<" not in page

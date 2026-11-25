@@ -370,6 +370,7 @@ def test_locked_card(db_path: Path) -> None:
     assert "Locked by pipeline. This lock is 4 minutes old." in html
     assert '<button disabled class="button"' in html and ">Resume</button>" in html
     assert "Locked by another command" in html and "/confirm" not in html
+    assert "the lock is stale" in html and "sources/7/.lock-holder" in html
 
 
 def test_unreadable_lock_card(db_path: Path) -> None:

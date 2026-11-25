@@ -60,7 +60,7 @@ def test_lock_text() -> None:
 def test_failed_job_panel() -> None:
     html = failed_job_html(_failed(), {7: "Interview"}, _RETRY)
     assert "rank" in html and "Interview" in html
-    assert "The job stopped. See the dashboard terminal for the details." in html
+    assert "The job stopped. The details are in montaj.log" in html
     assert "raw path" not in html and "C:\\x" not in html
     assert "Saved work is kept. Finished stages are reused when you retry." in html
     assert "Run spend $0.12" in html
@@ -123,3 +123,37 @@ def test_empty_board_html() -> None:
     read_only = empty_board_html(False)
     assert "No runs yet" in read_only and "then refresh" in read_only
     assert "href=" not in read_only and "<button" not in read_only
+
+
+def test_retry_is_withheld_after_a_source_ceiling_stop() -> None:
+    problem = (
+        "draft: per-source budget ceiling $2.000000; estimated spend $1.950000, "
+        "next call $0.100000."
+    )
+    live = _failed(problem=problem)
+    html = retry_html(live, {7: "Interview"}, None, _ctx())
+    assert "/confirm" not in html and "Over the source ceiling" in html
+    assert "<button disabled" in html
+
+
+def test_failed_panel_keeps_the_summary_and_review_link() -> None:
+    live = LiveJob(
+        7, "draft", False, 9.0, 0.5, "Stopped during draft after 7 clips.", "x"
+    )
+    html = failed_job_html(live, {7: "Interview"}, _RETRY, review=True)
+    assert "Stopped during draft after 7 clips." in html
+    assert 'href="/?source=7&amp;ready=1">Review clips</a>' in html
+    assert "Review clips" not in failed_job_html(live, {7: "Interview"}, _RETRY)
+
+
+def test_failed_panel_escapes_the_summary() -> None:
+    live = LiveJob(7, "draft", False, 9.0, 0.5, "<i>x</i>", "x")
+    assert "<i>" not in failed_job_html(live, {7: "A"}, "")
+
+
+def test_lock_text_says_how_to_clear_a_stale_lock() -> None:
+    from montaj.dashboard_states import stale_lock_text
+
+    text = stale_lock_text(7)
+    assert "If no Montaj command is running, the lock is stale" in text
+    assert "sources/7/.lock-holder" in text
