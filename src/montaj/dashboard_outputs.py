@@ -61,8 +61,12 @@ def _note_html(record: OutputRecord) -> str:
 
 
 def _link_html(record: OutputRecord) -> str:
-    """No link for a source that is not permitted; else into the clip preview."""
-    if record.blocked_reason:
+    """A link into the clip preview, only where the preview lists the clip.
+
+    None for a source that is not permitted, a clip with only a raw render, or a
+    posted clip: the preview does not show them.
+    """
+    if record.blocked_reason or not record.in_preview:
         return ""
     label = "See check" if record.check_failed else "Open review"
     return link_button(f"/?source={record.source_id}#clip-{record.clip_id}", label)

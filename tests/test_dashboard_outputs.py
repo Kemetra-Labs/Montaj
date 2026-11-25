@@ -22,6 +22,7 @@ def _record(**over: object) -> OutputRecord:
         "check_note": "",
         "finished_at": _NOW - timedelta(minutes=3),
         "blocked_reason": "",
+        "in_preview": True,
     }
     fields.update(over)
     return OutputRecord(**fields)  # type: ignore[arg-type]
@@ -128,3 +129,8 @@ def test_heading_note_and_no_review_controls() -> None:
 def test_record_order_is_kept() -> None:
     html = outputs_html((_record(clip_id=9), _record(clip_id=3)), _NOW)
     assert html.index("#clip-9") < html.index("#clip-3")
+
+
+def test_clip_missing_from_the_preview_has_no_link() -> None:
+    html = outputs_html((_record(in_preview=False),), _NOW)
+    assert 'href="/?source=' not in html and "Ready for review" in html

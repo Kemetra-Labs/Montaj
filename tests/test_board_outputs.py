@@ -211,3 +211,12 @@ def test_limit_must_be_positive(db_path: Path) -> None:
 def test_output_size_matches_the_cut_styles() -> None:
     assert "1080x1920" in engine.CUT_STYLE and "1080x1920" in engine.CUT_STYLE_V2
     assert OUTPUT_SIZE == "1080×1920"
+
+
+def test_record_knows_whether_the_preview_lists_the_clip(db_path: Path) -> None:
+    _add_source(db_path)
+    _clip(db_path, 4, ClipStatus.CHECKED, final_path="clips/4/final.mp4")
+    _clip(db_path, 5, ClipStatus.RENDERED, raw_path="clips/5/raw.mp4")
+    _clip(db_path, 6, ClipStatus.POSTED, final_path="clips/6/final.mp4")
+    by_id = {record.clip_id: record.in_preview for record in _outputs(db_path)}
+    assert by_id == {4: True, 5: False, 6: False}

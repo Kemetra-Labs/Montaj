@@ -69,7 +69,7 @@ code { font-size: .9em; color: var(--ink); }
 .clip-panel video { width: min(100%, 19rem); max-height: 65dvh; background: var(--rail); }
 .board { display: grid; grid-template-columns: minmax(0, 1fr) minmax(13rem, 15rem); gap: 1rem; align-items: start; }
 .board.detail { grid-template-columns: minmax(0, 1.4fr) minmax(16rem, 1fr); }
-.pipeline { display: grid; grid-template-columns: minmax(0, 1fr) minmax(13rem, 15rem); gap: 1rem; align-items: start; }
+.pipeline { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(17rem, 1fr); gap: 1rem; align-items: start; }
 .side { display: grid; gap: 1rem; min-width: 0; }
 .panel, .queue { border: 1px solid var(--stroke); border-radius: var(--radius); background: var(--surface); min-width: 0; }
 .panel-head { padding: 1.1rem 1.05rem 0; }
@@ -198,7 +198,7 @@ code { font-size: .9em; color: var(--ink); }
     .rail nav a { padding: .32rem .45rem; font-size: .74rem; }
     .frame, .page { padding: 1.4rem .8rem 2rem; }
     .card { grid-template-columns: minmax(0, 1fr); gap: .6rem; }
-    .thumb { aspect-ratio: auto; width: 4.5rem; padding: .2rem .3rem; }
+    .card .thumb { aspect-ratio: auto; width: 4.5rem; padding: .2rem .3rem; }
     .card-head .badge { margin-left: 0; }
     .heading { align-items: flex-start; }
     .heading:has(.toolbar) { flex-direction: column; }

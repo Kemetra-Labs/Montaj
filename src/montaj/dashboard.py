@@ -3,6 +3,7 @@
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -188,6 +189,7 @@ def _overview(
 ) -> bytes:
     from montaj.board_view import awaiting_review, needs_attention  # board imports us
     from montaj.dashboard_cards import cards_html
+    from montaj.dashboard_outputs import outputs_html
 
     attention = [row for row in board if needs_attention(row)]
     review = [row for row in board if awaiting_review(row)]
@@ -226,7 +228,7 @@ def _overview(
 <section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Active runs</h2>
 <nav class="filters" aria-label="Filter sources">{filters}</nav></div>{results}</section>
 <aside class="side" aria-label="Recent outputs and resources"><section class="panel recent"><div class="section-heading"><h2>Recent outputs</h2></div>
-<p class="empty-copy">Nothing to show yet.</p></section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
+{outputs_html(data.outputs, datetime.now())}</section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
 <dl><div><dt>Data volume</dt><dd>{space}</dd></div></dl></section></aside></div>""",
         refresh=ctx.running is not None,
     )
@@ -295,9 +297,10 @@ def dashboard_response(
     choices: tuple[tuple[int, str], ...] = ()
     try:
         from montaj.board import build_rows  # board imports this module
-        from montaj.board_view import build_view
+        from montaj.board_view import build_view, recent_outputs
 
         board = build_rows(settings, running=running, source_id=source_id)
+        outputs = recent_outputs(settings, 5) if source_id is None else ()
         if source_id is not None:
             campaign = _campaign_name(settings, source_id)
         elif operations and running is None:  # the form is not shown while busy
@@ -330,6 +333,7 @@ def dashboard_response(
             source_ceiling=ceilings.per_source,
             run_ceiling=ceilings.per_run,
             run_spend=run_spend,
+            outputs=outputs,
         )
         return 200, html, _overview(settings, board, view, context, data)
     if not board:

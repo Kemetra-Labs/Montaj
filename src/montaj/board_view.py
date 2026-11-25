@@ -88,6 +88,8 @@ class OutputRecord:
     check_note: str
     finished_at: datetime | None
     blocked_reason: str
+    # The clip preview lists only clips with a final render that are not posted.
+    in_preview: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,6 +313,7 @@ def _output(settings: Settings, clip: Clip, blocked: str) -> OutputRecord:
         check_note(clip.decision_reason) if failed else "",
         _modified(settings, media),
         blocked,
+        clip.final_path is not None and clip.status is not ClipStatus.POSTED,
     )
 
 
