@@ -81,21 +81,8 @@ def _document(title: str, body: str, refresh: bool) -> bytes:
 <body><a class="skip" href="#main">Skip to content</a>{body}</body></html>""".encode()
 
 
-def render_dashboard_page(
-    title: str, content: str, active: str = "", refresh: bool = False
-) -> bytes:
-    return _document(
-        title,
-        f"""<div class="shell"><header class="rail">
-<a class="brand" href="/dashboard"><span class="brand-mark" aria-hidden="true">M</span>Montaj</a>
-<nav aria-label="Main"><a href="/dashboard" {active}>Production board</a><a href="/">Clip preview <span aria-hidden="true">↗</span></a></nav>
-</header><main class="frame" id="main">{content}</main></div>""",
-        refresh,
-    )
-
-
 def render_board_page(title: str, content: str, refresh: bool = False) -> bytes:
-    """The board home's shell: no side rail, the page header carries the brand."""
+    """Every dashboard page's shell: no side rail, the page header carries the brand."""
     return _document(
         title, f'<div class="page"><main id="main">{content}</main></div>', refresh
     )

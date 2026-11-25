@@ -15,7 +15,7 @@ from montaj.config import Settings
 from montaj.costs import cost_totals
 from montaj.dashboard_controls import controls_html
 from montaj.dashboard_detail import live_panel_html, render_detail
-from montaj.dashboard_header import header_html, summary_html
+from montaj.dashboard_header import header_html, render_page, summary_html
 from montaj.dashboard_new_job import new_job_html
 from montaj.dashboard_parts import (
     BASE_PATH,
@@ -23,7 +23,6 @@ from montaj.dashboard_parts import (
     LiveJob,
     parse_source_id,
     render_board_page,
-    render_dashboard_page,
     source_problem,
 )
 from montaj.db import connect, fetch
@@ -299,9 +298,10 @@ def not_found_response() -> tuple[int, str, bytes]:
     return (
         404,
         "text/html; charset=utf-8",
-        render_dashboard_page(
+        render_page(
             "Source not found",
-            '<h1>Source not found</h1><a href="/dashboard">All sources</a>',
+            '<h1 class="page-title">Source not found</h1>'
+            '<p><a href="/dashboard">All sources</a></p>',
         ),
     )
 
@@ -352,9 +352,10 @@ def dashboard_response(
         return (
             503,
             html,
-            render_dashboard_page(
+            render_page(
                 "Dashboard unavailable",
-                "<h1>Dashboard unavailable</h1><p>Check the data directory and run <code>montaj db init</code> to initialize or migrate the database.</p>",
+                '<h1 class="page-title">Dashboard unavailable</h1>'
+                "<p>Check the data directory and run <code>montaj db init</code> to initialize or migrate the database.</p>",
             ),
         )
     outputs, outputs_failed = _outputs(settings) if source_id is None else ((), False)

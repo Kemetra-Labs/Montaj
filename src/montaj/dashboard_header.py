@@ -3,7 +3,7 @@
 from html import escape
 from typing import TYPE_CHECKING
 
-from montaj.dashboard_parts import BASE_PATH, format_usd
+from montaj.dashboard_parts import BASE_PATH, format_usd, render_board_page
 
 if TYPE_CHECKING:
     from montaj.board_view import Summary
@@ -60,8 +60,17 @@ def summary_html(summary: "Summary") -> str:
     )
 
 
-def header_html(live: bool) -> str:
-    """Brand, page title and, while a job runs, a Live indicator that says so in words."""
+def header_html(live: bool, home: bool = True) -> str:
+    """Brand, page title and, while a job runs, a Live indicator that says so in words.
+
+    The board home's title is its `<h1>`. Other pages link home by the same name
+    and carry their own `<h1>` in the content.
+    """
+    title = (
+        "<h1>Pipeline Control</h1>"
+        if home
+        else f'<a class="page-name" href="{BASE_PATH}">Pipeline Control</a>'
+    )
     indicator = (
         '<p class="live"><span class="live-dot" aria-hidden="true"></span>Live</p>'
         if live
@@ -71,5 +80,12 @@ def header_html(live: bool) -> str:
         '<header class="page-head">'
         f'<a class="brand" href="{BASE_PATH}"><span class="brand-mark" aria-hidden="true">M</span>Montaj</a>'
         '<span class="divider" aria-hidden="true"></span>'
-        f"<h1>Pipeline Control</h1>{indicator}</header>"
+        f"{title}{indicator}</header>"
     )
+
+
+def render_page(
+    title: str, content: str, *, live: bool = False, refresh: bool = False
+) -> bytes:
+    """A dashboard page other than the home: the board shell and header."""
+    return render_board_page(title, header_html(live, home=False) + content, refresh)

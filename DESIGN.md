@@ -19,7 +19,7 @@ Dark only. Neutrals are tinted toward hue 276 (violet). The accent is lime and i
 | Token | Value | Use |
 |---|---|---|
 | `--canvas` | `oklch(18% .016 276)` | page |
-| `--rail` | `oklch(15.5% .016 276)` | second neutral layer: inputs, legend bars, sidebar |
+| `--rail` | `oklch(15.5% .016 276)` | second neutral layer: inputs, legend bars, meter track |
 | `--surface` | `oklch(22% .02 276)` | panels |
 | `--raised` | `oklch(25.5% .025 276)` | hover, selected, skeleton blocks |
 | `--stroke` | `oklch(33% .025 276)` | borders, dividers, empty progress tracks |
@@ -53,7 +53,8 @@ Panel radius `.85rem`. Controls `.44rem` to `.5rem`. Tags and chips `.3rem`. Thu
 ## Components
 
 - **Button.** `.button` (surface, stroke border) and `.primary` (accent). Min height 2.2rem, 2.75rem for New run. Hover lifts to `--raised` and a `--muted` border. Disabled drops to 45% opacity and does not react to hover.
-- **Page header.** The `M` brand mark and name, a 1px divider, the page title (h1, 1.6rem), and at the right a Live indicator while a job runs: a dot and the word "Live". No side rail on the board home.
+- **Page header.** The `M` brand mark and name, a 1px divider, the page title, and at the right a Live indicator while a job runs: a dot and the word "Live". Every dashboard page uses it and none has a side rail. On the board home the title is the page's h1 (1.6rem); on every other page it is a "Pipeline Control" link home, and the page's own h1 follows in the content.
+- **Source page.** Top to bottom: the header; a "← Pipeline Control" back link; a source card in the board card's style (the title as h1, `#id · niche · Campaign`, the same chip as the home card, the 11-stage bar, "Stage N of 11 · stage · free or paid stage" and "Source spend $x of $y source ceiling · $z left", and a Refresh link); the attention notice; the live job panel, whose problem text follows the failed-job wording rule; then two columns: Stages (each line with its segment swatch, state word, note and its Run, Retry or Rerun) and, on the right, Source information, Clips and Saved checkpoints. The cost confirmation pages use the same header, a back link to the source, and one panel with the estimate lines and "Confirm and run" beside "Cancel".
 - **Summary strip.** Four cells in one panel, divided by 1px gaps. Each has a label, a 2rem figure and one note line. Tone changes the note's ink only (warning, review) and always comes with words. Two columns below 52rem.
 - **Chip.** Tinted background plus matching ink, `.3rem` radius, text always present. Running uses accent ink on `--raised`, needs-confirm uses review, blocked and failed use warning. A source card carries one of eight chips, first match wins: Blocked and Failed (warning), Running (accent on `--raised`), Ready for review, Ready to export and Needs your confirm (review), Done (success), Waiting (neutral).
 - **Active run card.** A placeholder thumbnail with the duration, the title and `#id · niche`, the chip, the stage bar, one line under the bar ("Stage N of 11 · stage · free or paid stage" and "Source budget $x of $y · $z left"), distinct failure and blocked notes, a bold next-action sentence with a muted one under it, and one button. No dollar estimate is shown on the card: it is shown on the confirm page before a paid stage starts. A legend row under the list names the six segment states.
