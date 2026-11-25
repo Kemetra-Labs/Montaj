@@ -151,7 +151,7 @@ def live_panel_html(live: LiveJob | None, source_id: int | None = None) -> str:
     if live is None or (source_id is not None and live.source_id != source_id):
         return ""
     spend = format_usd(live.spend) if live.spend is not None else "unavailable"
-    figures = f"<p>Elapsed {live.elapsed_s:.0f} s · Run spend {spend}</p>"
+    figures = f"<p>Elapsed {live.elapsed_s:.0f} s · Run spend {escape(spend)}</p>"
     if live.running:
         heading, body = f"Running: {live.stage}", ""
     else:

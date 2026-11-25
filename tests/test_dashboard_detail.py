@@ -586,3 +586,10 @@ def test_live_panel_words_a_raw_problem(db_path: Path) -> None:
     page = _detail_page(db_path, live=live)
     assert "The job stopped. The details are in montaj.log" in page
     assert "y.mp4" not in page
+
+
+def test_live_panel_escapes_a_tiny_spend(db_path: Path) -> None:
+    _add_source(db_path)
+    live = LiveJob(7, "rank", True, 3.0, 0.0002, "", "")
+    page = _detail_page(db_path, running=(7, "rank"), live=live)
+    assert "Run spend &lt;$0.001" in page and "<$0.001" not in page
