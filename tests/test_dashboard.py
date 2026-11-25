@@ -134,7 +134,7 @@ def test_source_detail_shows_checkpoints_clip_status_and_cost(db_path: Path) -> 
 
 def test_dashboard_empty_and_missing_database(db_path: Path, tmp_path: Path) -> None:
     empty = handle_preview(Settings(data_dir=db_path.parent), "/dashboard")
-    assert empty[0] == 200 and b"No sources yet" in empty[2]
+    assert empty[0] == 200 and b"No runs yet" in empty[2]
     missing = Settings(data_dir=tmp_path / "missing")
     assert handle_preview(missing, "/dashboard")[0] == 503
     assert not missing.db_path.exists()

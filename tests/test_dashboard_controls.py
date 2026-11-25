@@ -91,3 +91,10 @@ def test_low_disk_is_shown_in_megabytes() -> None:
     assert "40 MB free" in low and "GB free" not in low
     assert "warning" not in disk_html(1024 * 1024**2, 1024)
     assert "Below the 1024 MB warning level" in disk_html(1024 * 1024**2 - 1, 1024)
+
+
+def test_running_meter_says_ceiling_reached() -> None:
+    assert "Run ceiling reached" in meter_html(_summary(0.5, 0.5))
+    assert 'class="secondary run-limit"' in meter_html(_summary(0.7, 0.5))
+    assert "Run ceiling reached" not in meter_html(_summary(0.4, 0.5))
+    assert "Run ceiling reached" not in meter_html(_summary())

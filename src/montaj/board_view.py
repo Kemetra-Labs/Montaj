@@ -3,9 +3,11 @@
 Plain functions and frozen dataclasses with no HTML, so a page only renders them.
 """
 
+import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from montaj.board import BoardRow, CellState, NextAction, StageCell
@@ -61,6 +63,14 @@ class Chip:
 
 
 @dataclass(frozen=True, slots=True)
+class LockInfo:
+    """Who holds a source's lock and since when. Empty when the file is unreadable."""
+
+    command: str
+    started: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class SourceCard:
     source_id: int
     title: str
@@ -75,6 +85,8 @@ class SourceCard:
     clips_to_review: int
     chip: Chip
     current: int
+    lock: LockInfo | None = None
+    over_budget: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,14 +169,25 @@ def segment_word(segment: StageSegment, is_current: bool) -> str:
     return segment.state.value
 
 
-def chip_for(row: BoardRow, segments: tuple[StageSegment, ...]) -> Chip:
-    """The first rule that matches: blocked, running, failed, review, export, confirm."""
+def chip_for(
+    row: BoardRow,
+    segments: tuple[StageSegment, ...],
+    *,
+    locked: bool = False,
+    over_budget: bool = False,
+) -> Chip:
+    """The first rule that matches: blocked, running, locked, over budget, failed,
+    review, export, confirm."""
     snapshot, action = row.snapshot, row.action
     states = {segment.state for segment in segments}
     if permission_reason(snapshot.allowed, snapshot.basis):
         return Chip("Blocked", "warning")
     if CellState.RUNNING in states:
         return Chip("Running", "running")
+    if locked:
+        return Chip("Locked", "warning")
+    if over_budget:
+        return Chip("Over budget", "warning")
     if CellState.FAILED in states or (action and action.kind == "fix"):
         return Chip("Failed", "warning")
     if snapshot.clips[ClipStatus.CHECKED]:
@@ -179,9 +202,10 @@ def chip_for(row: BoardRow, segments: tuple[StageSegment, ...]) -> Chip:
     return Chip("Waiting", "neutral")
 
 
-def _card(row: BoardRow, source_ceiling: float) -> SourceCard:
+def _card(row: BoardRow, source_ceiling: float, lock: LockInfo | None) -> SourceCard:
     snapshot = row.snapshot
     segments = stage_segments(row.cells)
+    over = source_ceiling > 0 and snapshot.cost >= source_ceiling
     return SourceCard(
         snapshot.source_id,
         snapshot.title,
@@ -194,8 +218,10 @@ def _card(row: BoardRow, source_ceiling: float) -> SourceCard:
         source_ceiling,
         max(source_ceiling - snapshot.cost, 0.0),
         snapshot.clips[ClipStatus.CHECKED] if awaiting_review(row) else 0,
-        chip_for(row, segments),
+        chip_for(row, segments, locked=lock is not None, over_budget=over),
         current_stage(segments),
+        lock,
+        over,
     )
 
 
@@ -206,6 +232,7 @@ def build_view(
     run_ceiling: float,
     run_spend: tuple[float, float] | None = None,
     outputs: tuple[OutputRecord, ...] = (),
+    locks: dict[int, LockInfo] | None = None,
 ) -> BoardView:
     """The board's data. A running job's own ceiling replaces `run_ceiling`.
 
@@ -224,7 +251,10 @@ def build_view(
             if awaiting_review(row)
         ),
     )
-    cards = tuple(_card(row, source_ceiling) for row in rows)
+    held = locks or {}
+    cards = tuple(
+        _card(row, source_ceiling, held.get(row.snapshot.source_id)) for row in rows
+    )
     return BoardView(summary, cards, outputs)
 
 
@@ -350,3 +380,101 @@ def recent_outputs(settings: Settings, limit: int = 5) -> tuple[OutputRecord, ..
         _output(settings, clip, reasons.get(clip.source_id, NOT_PERMITTED_REASON))
         for clip in clips
     )
+
+
+# A holder command is a Montaj command name; anything else is not shown.
+_COMMAND = re.compile(r"[a-z][a-z0-9_ -]{0,39}")
+_HOLDER_BYTES = 4096
+
+
+def _lock_time(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        started = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return started if started.tzinfo else started.replace(tzinfo=UTC)
+
+
+def _read_lock(path: Path, root: Path) -> LockInfo | None:
+    """A lock holder file, read without following links. None when there is none."""
+    unknown = LockInfo("", None)
+    try:
+        if path.is_symlink():
+            return unknown
+        if not path.exists():
+            return None
+        if not path.resolve().is_relative_to(root) or not path.is_file():
+            return unknown
+        with path.open("rb") as handle:
+            payload = json.loads(handle.read(_HOLDER_BYTES).decode("utf-8"))
+    except (OSError, ValueError, RuntimeError):
+        return unknown
+    if not isinstance(payload, dict):
+        return unknown
+    command = payload.get("command")
+    if not isinstance(command, str) or not _COMMAND.fullmatch(command):
+        command = ""
+    return LockInfo(command, _lock_time(payload.get("started")))
+
+
+def source_locks(
+    settings: Settings,
+    source_ids: Iterable[int],
+    running: tuple[int, str] | None,
+) -> dict[int, LockInfo]:
+    """Sources whose `.lock-holder` file exists. Reads only; never takes the lock.
+
+    The source of the dashboard's own running job is Running, not Locked. While
+    the dashboard imports (source 0), the new source's ingest lock is its own too.
+    """
+    skip = running[0] if running else None
+    importing = skip == 0
+    root = settings.data_dir.resolve()
+    locks: dict[int, LockInfo] = {}
+    for source_id in source_ids:
+        if source_id == skip:
+            continue
+        path = settings.data_dir / "sources" / str(source_id) / ".lock-holder"
+        lock = _read_lock(path, root)
+        if lock is not None and not (importing and lock.command == "ingest"):
+            locks[source_id] = lock
+    return locks
+
+
+# A stored job problem is shown as written only when it is one plain sentence:
+# one short line with no path, URL, markup or trace. Anything else may hold tool
+# output, so it is replaced; `dashboard_jobs` logs every problem in full.
+_PLAIN_LIMIT = 300
+_NOT_PLAIN = ("/", "\\", "<", ">")
+# `budget` raises "<stage>: per-run budget ceiling $…", or per-source.
+_BUDGET_STOP = re.compile(r"[a-z_ -]{1,40}: (per-run|per-source) budget ceiling \$")
+RUN_CEILING_STOP = "The run ceiling was reached before the next paid call."
+SOURCE_CEILING_STOP = "The source ceiling was reached before the next paid call."
+_BUDGET_NOTES = {"per-run": RUN_CEILING_STOP, "per-source": SOURCE_CEILING_STOP}
+_JOB_STOPPED = (
+    "The job stopped. The details are in montaj.log in the logs folder of the "
+    "data directory."
+)
+
+
+def _plain(text: str) -> bool:
+    return (
+        len(text) <= _PLAIN_LIMIT
+        and "\n" not in text
+        and "\r" not in text
+        and not text.startswith("Traceback")
+        and not any(mark in text for mark in _NOT_PLAIN)
+    )
+
+
+def job_problem_note(problem: str) -> str:
+    """A stored job problem fit for the page: a plain sentence, else fixed wording."""
+    text = problem.strip()
+    if not text:
+        return ""
+    budget = _BUDGET_STOP.match(text)
+    if budget:
+        return _BUDGET_NOTES[budget.group(1)]
+    return text if _plain(text) else _JOB_STOPPED

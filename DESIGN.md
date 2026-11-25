@@ -68,7 +68,13 @@ Panel radius `.85rem`. Controls `.44rem` to `.5rem`. Tags and chips `.3rem`. Thu
 
 ## States
 
-Every list has an empty state that teaches the next step, a loading skeleton in `--raised` blocks (no spinner in the middle of content), a failed-job state with the retry cost, and a locked-source state with the age of the lock. Their comps live on the "Board states" artboard of the design canvas.
+Every list has an empty state that teaches the next step. Their comps live on the "Board states" artboard of the design canvas. On the board home:
+
+- **Empty board.** "No runs yet", the `montaj ingest` pointer and a New job button. The New job form starts open on an empty board, so the button lands on it. A read-only board says to import with `montaj ingest` and refresh, with no button. An empty filter keeps "No sources match this view".
+- **Failed job.** Replaces the Latest job panel when the latest job stopped with a problem. It names the stage and source, gives the job summary and the problem: a plain one-line sentence as written, a ceiling stop in words, anything else (paths, URLs, markup, traces) as a pointer to `montaj.log` in the data directory's `logs` folder, where every job failure is logged in full. It says saved work is kept, gives the run spend, links to review when checked clips are ready, and offers Retry to the source's cost confirmation, which shows the retry cost. No Retry for a failed import, a blocked, locked or over-budget source, after a source-ceiling stop, or while another job runs. A batch that ran out of eligible candidates is not a failure.
+- **Locked source.** A source whose `.lock-holder` file exists shows the Locked chip, the holder command and the lock's age in words, and a disabled Resume or Retry saying "Locked by another command". The dashboard's own running source shows Running instead, and so does the source it is importing. The board only reads the file: the card says how to clear a stale lock from the terminal, and no control clears it.
+- **Over budget.** A source at or above its source ceiling shows the Over budget chip, "Over its $x source ceiling. Paid stages are off for this source.", and a disabled Resume or Retry. A running job at its run ceiling adds "Run ceiling reached" to the meter.
+- **Loading.** None: the board is server-rendered with no fetched content, so there is no loading skeleton.
 
 ## Motion
 

@@ -81,6 +81,8 @@ def atomic_bytes(path: Path, content: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
+BUSY_MESSAGE = "This source is already being processed or cannot be locked."
+
 # Stage calls may nest within one job. Concurrent threads must acquire the OS lock.
 _held_depth: dict[tuple[int, str], int] = {}
 
@@ -106,9 +108,7 @@ def source_lock(
         holder.write_text(_holder_text(command), encoding="utf-8")
     except OSError as exc:
         _release(fd)
-        raise MediaError(
-            "This source is already being processed or cannot be locked."
-        ) from exc
+        raise MediaError(BUSY_MESSAGE) from exc
     _held_depth[key] = 1
     try:
         yield
@@ -129,9 +129,7 @@ def _acquire(lock_path: Path, wait: float) -> int:
         try:
             fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
         except OSError as exc:
-            raise MediaError(
-                "This source is already being processed or cannot be locked."
-            ) from exc
+            raise MediaError(BUSY_MESSAGE) from exc
         try:
             _ensure_byte(fd)
             _try_lock(fd)
@@ -144,9 +142,7 @@ def _acquire(lock_path: Path, wait: float) -> int:
             continue
         except OSError as exc:
             os.close(fd)
-            raise MediaError(
-                "This source is already being processed or cannot be locked."
-            ) from exc
+            raise MediaError(BUSY_MESSAGE) from exc
         return fd
 
 
@@ -193,7 +189,7 @@ def _release(fd: int) -> None:
 
 
 def _busy_message(lock_path: Path) -> str:
-    fallback = "This source is already being processed or cannot be locked."
+    fallback = BUSY_MESSAGE
     try:
         payload = json.loads(
             (lock_path.parent / ".lock-holder").read_text(encoding="utf-8")

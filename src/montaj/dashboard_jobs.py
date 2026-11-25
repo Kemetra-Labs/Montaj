@@ -69,7 +69,10 @@ _STAGE_LINES = {
 # Stages without an offline price, named as the cost note reads.
 _UNPRICED = {BoardStage.RANK: "candidates and rank", BoardStage.DRAFT: "draft"}
 _CONFIRM_FIRST = "Confirm the estimated cost first."
-_UNEXPECTED = "Unexpected error. See the dashboard terminal, then try again."
+_UNEXPECTED = (
+    "Unexpected error. Check montaj.log in the logs folder of the data "
+    "directory, then try again."
+)
 _FILE_PROBLEM = (
     "A saved file or record could not be read. Check the data directory, "
     "then try again."
@@ -86,18 +89,16 @@ def _safe_first_line(text: str) -> str:
 
 
 def _job_problem(exc: Exception) -> str:
-    """What the live panel shows for a failed job. Paths and raw notes stay in the log."""
+    """What the live panel shows for a failed job. Every failure is logged in full,
+    so paths and raw notes stay in the log."""
     if isinstance(exc, MediaError) or isinstance(exc.__cause__, MediaError):
-        shown = _safe_first_line(str(exc))
-        if shown == str(exc).strip():
-            return shown
-        problem = shown or _MEDIA_PROBLEM  # the full text goes to the log
+        problem = _safe_first_line(str(exc)) or _MEDIA_PROBLEM
     elif isinstance(exc, OSError | ValidationError):
         problem = _FILE_PROBLEM
     elif isinstance(exc, SpeechError) and exc.code == 4:  # holds the raw failure note
         problem = source_problem("failed", None) or _UNEXPECTED
     elif isinstance(exc, _JOB_ERRORS):
-        return str(exc)
+        problem = str(exc)
     else:
         problem = _UNEXPECTED
     _LOG.error("Dashboard job stopped: %s", problem, exc_info=exc)

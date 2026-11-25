@@ -65,11 +65,15 @@ def _body_html(ctx: BoardContext) -> str:
     return _form_html(ctx)
 
 
-def new_job_html(ctx: BoardContext) -> str:
-    """The collapsible form. Empty on a read-only server. Open when a message waits."""
+def new_job_html(ctx: BoardContext, *, open_form: bool = False) -> str:
+    """The collapsible form. Empty on a read-only server.
+
+    Open when a message waits, or when the board is empty (`open_form`), so the
+    empty board's New job button lands on the form.
+    """
     if not ctx.operations:
         return ""
-    state = " open" if ctx.notice else ""
+    state = " open" if ctx.notice or open_form else ""
     return (
         f'<details id="new-job" class="panel job-panel"{state}>'
         f"<summary>New job</summary>{_body_html(ctx)}</details>"
