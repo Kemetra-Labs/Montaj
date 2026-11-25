@@ -29,6 +29,7 @@ from montaj.review import approval_problem
 from montaj.transcribe import Transcriber, transcribe_source
 
 DEFAULT_TARGET = 10
+NO_MORE_CANDIDATES = "No more eligible candidates in the ranked batch."
 _JOB_ERRORS = (
     ExternalCallError,
     MediaError,
@@ -163,7 +164,7 @@ def produce_batch(
         except BudgetExceeded as exc:
             result.stop = str(exc)
     if len(result.ready) < top and result.stop is None:
-        result.stop = "No more eligible candidates in the ranked batch."
+        result.stop = NO_MORE_CANDIDATES
     return result
 
 

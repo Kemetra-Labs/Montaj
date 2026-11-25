@@ -3,15 +3,24 @@
 Plain functions and frozen dataclasses with no HTML, so a page only renders them.
 """
 
+import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
+from montaj import dashboard_jobs
 from montaj.board import BoardRow, CellState, NextAction, StageCell
 from montaj.config import Settings
-from montaj.dashboard_parts import NOT_PERMITTED_REASON, permission_reason
+from montaj.dashboard_parts import (
+    NOT_PERMITTED_REASON,
+    permission_reason,
+    source_problem,
+)
 from montaj.db import connect
+from montaj.job import NO_MORE_CANDIDATES
+from montaj.media import BUSY_MESSAGE
 from montaj.models import CheckResult, Clip, ClipStatus
 
 STAGES: tuple[tuple[str, str], ...] = (
@@ -61,6 +70,14 @@ class Chip:
 
 
 @dataclass(frozen=True, slots=True)
+class LockInfo:
+    """Who holds a source's lock and since when. Empty when the file is unreadable."""
+
+    command: str
+    started: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class SourceCard:
     source_id: int
     title: str
@@ -75,6 +92,8 @@ class SourceCard:
     clips_to_review: int
     chip: Chip
     current: int
+    lock: LockInfo | None = None
+    over_budget: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,14 +176,25 @@ def segment_word(segment: StageSegment, is_current: bool) -> str:
     return segment.state.value
 
 
-def chip_for(row: BoardRow, segments: tuple[StageSegment, ...]) -> Chip:
-    """The first rule that matches: blocked, running, failed, review, export, confirm."""
+def chip_for(
+    row: BoardRow,
+    segments: tuple[StageSegment, ...],
+    *,
+    locked: bool = False,
+    over_budget: bool = False,
+) -> Chip:
+    """The first rule that matches: blocked, running, locked, over budget, failed,
+    review, export, confirm."""
     snapshot, action = row.snapshot, row.action
     states = {segment.state for segment in segments}
     if permission_reason(snapshot.allowed, snapshot.basis):
         return Chip("Blocked", "warning")
     if CellState.RUNNING in states:
         return Chip("Running", "running")
+    if locked:
+        return Chip("Locked", "warning")
+    if over_budget:
+        return Chip("Over budget", "warning")
     if CellState.FAILED in states or (action and action.kind == "fix"):
         return Chip("Failed", "warning")
     if snapshot.clips[ClipStatus.CHECKED]:
@@ -179,9 +209,10 @@ def chip_for(row: BoardRow, segments: tuple[StageSegment, ...]) -> Chip:
     return Chip("Waiting", "neutral")
 
 
-def _card(row: BoardRow, source_ceiling: float) -> SourceCard:
+def _card(row: BoardRow, source_ceiling: float, lock: LockInfo | None) -> SourceCard:
     snapshot = row.snapshot
     segments = stage_segments(row.cells)
+    over = source_ceiling > 0 and snapshot.cost >= source_ceiling
     return SourceCard(
         snapshot.source_id,
         snapshot.title,
@@ -194,8 +225,10 @@ def _card(row: BoardRow, source_ceiling: float) -> SourceCard:
         source_ceiling,
         max(source_ceiling - snapshot.cost, 0.0),
         snapshot.clips[ClipStatus.CHECKED] if awaiting_review(row) else 0,
-        chip_for(row, segments),
+        chip_for(row, segments, locked=lock is not None, over_budget=over),
         current_stage(segments),
+        lock,
+        over,
     )
 
 
@@ -206,6 +239,7 @@ def build_view(
     run_ceiling: float,
     run_spend: tuple[float, float] | None = None,
     outputs: tuple[OutputRecord, ...] = (),
+    locks: dict[int, LockInfo] | None = None,
 ) -> BoardView:
     """The board's data. A running job's own ceiling replaces `run_ceiling`.
 
@@ -224,7 +258,10 @@ def build_view(
             if awaiting_review(row)
         ),
     )
-    cards = tuple(_card(row, source_ceiling) for row in rows)
+    held = locks or {}
+    cards = tuple(
+        _card(row, source_ceiling, held.get(row.snapshot.source_id)) for row in rows
+    )
     return BoardView(summary, cards, outputs)
 
 
@@ -350,3 +387,112 @@ def recent_outputs(settings: Settings, limit: int = 5) -> tuple[OutputRecord, ..
         _output(settings, clip, reasons.get(clip.source_id, NOT_PERMITTED_REASON))
         for clip in clips
     )
+
+
+# A holder command is a Montaj command name; anything else is not shown.
+_COMMAND = re.compile(r"[a-z][a-z0-9_ -]{0,39}")
+_HOLDER_BYTES = 4096
+
+
+def _lock_time(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        started = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return started if started.tzinfo else started.replace(tzinfo=UTC)
+
+
+def _read_lock(path: Path, root: Path) -> LockInfo | None:
+    """A lock holder file, read without following links. None when there is none."""
+    unknown = LockInfo("", None)
+    try:
+        if path.is_symlink():
+            return unknown
+        if not path.exists():
+            return None
+        if not path.resolve().is_relative_to(root) or not path.is_file():
+            return unknown
+        with path.open("rb") as handle:
+            payload = json.loads(handle.read(_HOLDER_BYTES).decode("utf-8"))
+    except (OSError, ValueError, RuntimeError):
+        return unknown
+    if not isinstance(payload, dict):
+        return unknown
+    command = payload.get("command")
+    if not isinstance(command, str) or not _COMMAND.fullmatch(command):
+        command = ""
+    return LockInfo(command, _lock_time(payload.get("started")))
+
+
+def source_locks(
+    settings: Settings,
+    source_ids: Iterable[int],
+    running: tuple[int, str] | None,
+) -> dict[int, LockInfo]:
+    """Sources whose `.lock-holder` file exists. Reads only; never takes the lock.
+
+    The source of the dashboard's own running job is Running, not Locked.
+    """
+    skip = running[0] if running else None
+    root = settings.data_dir.resolve()
+    locks: dict[int, LockInfo] = {}
+    for source_id in source_ids:
+        if source_id == skip:
+            continue
+        path = settings.data_dir / "sources" / str(source_id) / ".lock-holder"
+        lock = _read_lock(path, root)
+        if lock is not None:
+            locks[source_id] = lock
+    return locks
+
+
+# Sentences Montaj itself stores as a job problem. Anything else may hold a path,
+# a trace or tool output, so it is replaced, never shown.
+_KNOWN_PROBLEMS = frozenset(
+    {
+        dashboard_jobs._UNEXPECTED,
+        dashboard_jobs._FILE_PROBLEM,
+        dashboard_jobs._MEDIA_PROBLEM,
+        NO_MORE_CANDIDATES,
+        BUSY_MESSAGE,
+        *(
+            sentence
+            for status, note in (
+                ("language_mismatch", None),
+                ("no_usable_speech", None),
+                ("failed", "javascript runtime"),
+                ("failed", "ejs solver"),
+                ("failed", "format available"),
+                ("failed", None),
+            )
+            if (sentence := source_problem(status, note))
+        ),
+    }
+)
+# `media._busy_message` names the holder and when it started.
+_BUSY_BY = re.compile(
+    r"This source is already being processed by [a-z][a-z0-9_ -]{0,39} "
+    r"since [0-9T:+.-]{10,40}\."
+)
+# `budget` raises "<stage>: per-run budget ceiling $…", or per-source.
+_BUDGET_STOP = re.compile(r"[a-z_ -]{1,40}: (per-run|per-source) budget ceiling \$")
+_BUDGET_NOTES = {
+    "per-run": "The run ceiling was reached before the next paid call.",
+    "per-source": "The source ceiling was reached before the next paid call.",
+}
+_JOB_STOPPED = "The job stopped. See the dashboard terminal for the details."
+
+
+def job_problem_note(problem: str) -> str:
+    """Fixed wording for a stored job problem: Montaj's own sentences, else one."""
+    text = problem.strip()
+    if not text:
+        return ""
+    if text in _KNOWN_PROBLEMS or _BUSY_BY.fullmatch(text):
+        return text
+    budget = _BUDGET_STOP.match(text)
+    if budget:
+        return _BUDGET_NOTES[budget.group(1)]
+    return _JOB_STOPPED

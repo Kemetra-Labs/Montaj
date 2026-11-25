@@ -286,3 +286,39 @@ def test_blocked_card_shows_no_review_count() -> None:
     )
     cards = build_view([blocked, allowed], source_ceiling=1.0, run_ceiling=1.0).cards
     assert (cards[0].clips_to_review, cards[1].clips_to_review) == (0, 2)
+
+
+def _card_for(row: BoardRow, **kwargs: Any) -> Any:
+    return build_view([row], source_ceiling=2.0, run_ceiling=0.5, **kwargs).cards[0]
+
+
+def test_lock_and_budget_chips() -> None:
+    from montaj.board_view import LockInfo
+
+    lock = {1: LockInfo("pipeline", None)}
+    plain = _states(_D, _D, _P, _P, _P, _P, _P, action=_RESUME)
+    locked = _card_for(plain, locks=lock)
+    assert locked.lock == LockInfo("pipeline", None)
+    assert (locked.chip.label, locked.chip.tone) == ("Locked", "warning")
+
+    spent = _card_for(_states(_D, _D, _P, _P, _P, _P, _P, action=_RESUME, cost=2.0))
+    assert spent.over_budget and spent.chip.label == "Over budget"
+    assert not _card_for(plain).over_budget
+    assert _card_for(plain).lock is None
+
+    both = _card_for(
+        _states(_D, _D, _P, _P, _P, _P, _P, action=_RESUME, cost=3.0), locks=lock
+    )
+    assert both.chip.label == "Locked"
+
+    blocked = _states(_D, _D, _P, _P, _P, _P, _P, allowed=False, cost=3.0)
+    assert _card_for(blocked, locks=lock).chip.label == "Blocked"
+
+    running = _states(_D, _D, _R, _P, _P, _P, _P, cost=3.0)
+    assert _card_for(running, locks=lock).chip.label == "Running"
+
+
+def test_zero_ceiling_is_not_over_budget() -> None:
+    row = _states(_D, _D, _P, _P, _P, _P, _P, cost=0.0)
+    card = build_view([row], source_ceiling=0.0, run_ceiling=0.5).cards[0]
+    assert not card.over_budget
