@@ -19,7 +19,6 @@ from montaj.dashboard_header import header_html, summary_html
 from montaj.dashboard_new_job import new_job_html
 from montaj.dashboard_parts import (
     BASE_PATH,
-    NEW_JOB_LINK,
     BoardContext,
     LiveJob,
     parse_source_id,
@@ -34,7 +33,7 @@ from montaj.models import ClipStatus, Source
 
 if TYPE_CHECKING:
     from montaj.board import BoardRow
-    from montaj.board_view import BoardView, OutputRecord
+    from montaj.board_view import BoardView, LockInfo, OutputRecord
 
 _UNREADABLE = '<p class="empty-copy">Recent outputs could not be read.</p>'
 _CHECKPOINTS = (
@@ -169,17 +168,28 @@ def _load(settings: Settings, source_id: int | None) -> list[SourceSnapshot]:
 
 
 def _empty_html(has_sources: bool, ctx: BoardContext) -> str:
+    from montaj.dashboard_states import empty_board_html  # imports the board
+
     if has_sources:
         return '<div class="empty"><h2>No sources match this view</h2><a href="/dashboard">Show all sources</a></div>'
-    start = (
-        f'Start with <a href="{NEW_JOB_LINK}">New job</a> or import'
-        if ctx.operations
-        else "Import"
-    )
-    return (
-        f'<div class="empty"><h2>No sources yet</h2><p>{start} a permitted video '
-        "with <code>montaj ingest</code>.</p></div>"
-    )
+    return empty_board_html(ctx.operations)
+
+
+def _job_html(board: list["BoardRow"], ctx: BoardContext, data: "BoardView") -> str:
+    """The latest job: the failed panel when it stopped with a problem.
+
+    A batch that ran out of eligible candidates did not fail; it keeps the
+    Latest job panel.
+    """
+    from montaj.dashboard_states import failed_job_html, retry_html
+    from montaj.job import NO_MORE_CANDIDATES
+
+    live = ctx.live
+    if live is None or live.running or live.problem.strip() in ("", NO_MORE_CANDIDATES):
+        return live_panel_html(live)
+    titles = {row.snapshot.source_id: row.snapshot.title for row in board}
+    card = next((c for c in data.cards if c.source_id == live.source_id), None)
+    return failed_job_html(live, titles, retry_html(live, titles, card, ctx))
 
 
 def _overview(
@@ -229,13 +239,13 @@ def _overview(
     return render_board_page(
         "Pipeline Control",
         f"""{header_html(ctx.running is not None)}
-{notice}{live_panel_html(ctx.live)}{topbar}
+{notice}{_job_html(board, ctx, data)}{topbar}
 <div class="pipeline">
 <section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Active runs</h2>
 <nav class="filters" aria-label="Filter sources">{filters}</nav></div>{results}</section>
 <aside class="side" aria-label="Recent outputs"><section class="panel recent"><div class="section-heading"><h2>Recent outputs</h2></div>
 {_UNREADABLE if outputs_failed else outputs_html(data.outputs, datetime.now())}</section></aside></div>
-{controls_html(data.summary, new_job_html(ctx), view, free_bytes, settings.min_free_mb)}""",
+{controls_html(data.summary, new_job_html(ctx, open_form=not board), view, free_bytes, settings.min_free_mb)}""",
         refresh=ctx.running is not None,
     )
 
@@ -251,6 +261,19 @@ def _outputs(settings: Settings) -> tuple[tuple["OutputRecord", ...], bool]:
         return recent_outputs(settings, 5), False
     except (sqlite3.Error, OSError, ValidationError, ValueError):
         return (), True
+
+
+def _locks(
+    settings: Settings, board: list["BoardRow"], running: tuple[int, str] | None
+) -> dict[int, "LockInfo"]:
+    """Which sources another command holds. A failed read shows no locks."""
+    from montaj.board_view import source_locks  # board imports us
+
+    ids = [row.snapshot.source_id for row in board]
+    try:
+        return source_locks(settings, ids, running)
+    except (OSError, ValueError, RuntimeError):
+        return {}
 
 
 def _campaign_choices(settings: Settings) -> tuple[tuple[int, str], ...]:
@@ -353,6 +376,7 @@ def dashboard_response(
             run_ceiling=ceilings.per_run,
             run_spend=run_spend,
             outputs=outputs,
+            locks=_locks(settings, board, running),
         )
         return (
             200,

@@ -15,6 +15,7 @@ from montaj.dashboard import dashboard_response
 from montaj.dashboard_jobs import (
     JobQueue,
 )
+from montaj.dashboard_parts import LiveJob
 from montaj.db import connect, insert
 from montaj.ingest import SourceMetadata
 from montaj.models import Clip, ClipStatus, Niche, Source
@@ -48,6 +49,7 @@ def _home(
     operations: bool = True,
     running: tuple[int, str] | None = None,
     run_spend: tuple[float, float] | None = None,
+    live: LiveJob | None = None,
 ) -> str:
     _, _, body = dashboard_response(
         Settings(data_dir=db_path.parent),
@@ -57,6 +59,7 @@ def _home(
         running=running,
         token="board-token",
         run_spend=run_spend,
+        live=live,
     )
     return body.decode()
 

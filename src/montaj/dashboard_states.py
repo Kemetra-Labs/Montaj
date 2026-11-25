@@ -117,6 +117,6 @@ def empty_board_html(operations: bool) -> str:
     else:
         body = f"<p>Import a permitted video with {_INGEST}, then refresh.</p>"
     return (
-        '<section class="panel empty-board" aria-label="No runs yet">'
+        '<section class="empty-board" aria-label="No runs yet">'
         f"<h2>No runs yet</h2>{body}</section>"
     )

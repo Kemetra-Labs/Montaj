@@ -1,3 +1,4 @@
+import json
 import shutil
 from pathlib import Path
 from threading import Event
@@ -160,7 +161,7 @@ def test_home_refreshes_only_while_running(db_path: Path) -> None:
 
 def test_empty_board_points_to_new_job(db_path: Path) -> None:
     page = _home(db_path)
-    assert "No sources yet" in page
+    assert "No runs yet" in page
     assert 'id="new-job"' in page
     assert "<table" not in page
 
@@ -229,8 +230,8 @@ def test_board_has_new_job_form_with_permission_fields(db_path: Path) -> None:
     _add_campaign(db_path)
     jobs = JobQueue(Settings(data_dir=db_path.parent))
     page = _board(db_path, jobs)
-    assert '<details id="new-job" class="panel job-panel">' in page
-    assert 'id="new-job"' in page
+    # No sources yet, so the form starts open.
+    assert '<details id="new-job" class="panel job-panel" open>' in page
     form = page.split('<form class="job-form" action="/dashboard/jobs"', 1)[1]
     form = form.split("</form>", 1)[0]
     assert 'method="post"' in form and f'name="token" value="{jobs.token}"' in form
@@ -421,9 +422,12 @@ def test_finished_job_with_a_problem_has_no_review_link(
     )
     jobs.submit_stage(StageSubmission(source=7, stage=BoardStage.RENDER))
     threads[0].join(timeout=5)
-    for target in ("/dashboard", "/dashboard/sources/7"):
-        page = _board(db_path, jobs, target)
-        assert "One clip skipped." in page and ">Review clips</a>" not in page
+    home = _board(db_path, jobs, "/dashboard")
+    assert "failed-job" in home and ">Review clips</a>" not in home
+    assert "One clip skipped." not in home
+    assert "The job stopped. See the dashboard terminal for the details." in home
+    page = _board(db_path, jobs, "/dashboard/sources/7")
+    assert "One clip skipped." in page and ">Review clips</a>" not in page
 
 
 def test_campaigns_are_not_queried_while_a_job_runs(
@@ -587,7 +591,7 @@ def test_three_filters_list_the_right_sources(db_path: Path) -> None:
 
 
 def test_empty_board_and_empty_filter_messages(db_path: Path) -> None:
-    assert "No sources yet" in _home(db_path)
+    assert "No runs yet" in _home(db_path)
     _add_source(db_path)
     page = _home(db_path, view="attention")
     assert "No sources match this view" in page and "Show all sources" in page
@@ -732,3 +736,80 @@ def test_refused_new_job_notice_links_to_the_form(db_path: Path) -> None:
     notice = body.decode().split('<p class="notice"', 1)[1].split("</p>", 1)[0]
     assert "Video is required." in notice
     assert '<a href="#new-job">Back to the New job form</a>' in notice
+
+
+def _hold(db_path: Path, command: str = "pipeline") -> None:
+    folder = db_path.parent / "sources" / "7"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / ".lock-holder").write_text(
+        json.dumps({"command": command, "started": "2020-01-01T00:00:00+00:00"}),
+        encoding="utf-8",
+    )
+
+
+def test_home_shows_a_locked_source(db_path: Path) -> None:
+    _add_source(db_path)
+    _hold(db_path)
+    page = _home(db_path)
+    assert ">Locked<" in page and "Locked by pipeline. This lock is" in page
+    assert "hours old." in page
+
+
+def test_home_does_not_lock_the_running_source(db_path: Path) -> None:
+    _add_source(db_path)
+    _hold(db_path)
+    page = _home(db_path, running=(7, "batch"))
+    assert ">Running<" in page and ">Locked<" not in page
+
+
+def test_home_survives_an_unreadable_lock_read(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_source(db_path)
+
+    def broken(*args: object) -> None:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr("montaj.board_view.source_locks", broken)
+    page = _home(db_path)
+    assert "Interview" in page and ">Locked<" not in page
+
+
+def test_home_shows_the_failed_job(db_path: Path) -> None:
+    _add_source(db_path)
+    problem = r"C:\x\y.mp4 broke"
+    live = LiveJob(7, "rank", False, 30.0, 0.12, "Stopped during rank.", problem)
+    page = _home(db_path, live=live)
+    assert 'class="panel failed-job"' in page and "Latest job" not in page
+    assert "y.mp4" not in page
+    assert "The job stopped. See the dashboard terminal for the details." in page
+    assert 'href="/dashboard/sources/7/confirm?stage=batch">Retry</a>' in page
+
+
+def test_home_keeps_the_latest_job_panel_for_a_shortfall(db_path: Path) -> None:
+    _add_source(db_path)
+    live = LiveJob(
+        7,
+        "Done",
+        False,
+        30.0,
+        0.12,
+        "Made 3 clips.",
+        "No more eligible candidates in the ranked batch.",
+    )
+    page = _home(db_path, live=live)
+    assert "Latest job" in page and "failed-job" not in page
+
+
+def test_empty_board_opens_the_form(db_path: Path) -> None:
+    page = _home(db_path)
+    assert "No runs yet" in page and 'href="#new-job"' in page
+    assert '<details id="new-job" class="panel job-panel" open>' in page
+    read_only = _home(db_path, operations=False)
+    assert "No runs yet" in read_only
+    assert 'href="#new-job"' not in read_only and 'id="new-job"' not in read_only
+
+
+def test_board_with_sources_keeps_the_form_closed(db_path: Path) -> None:
+    _add_source(db_path)
+    assert '<details id="new-job" class="panel job-panel">' in _home(db_path)
