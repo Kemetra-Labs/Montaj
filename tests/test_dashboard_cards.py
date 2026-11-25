@@ -1,9 +1,10 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from montaj.board import FIX_GUIDANCE, INGEST_STEP, build_rows
-from montaj.board_view import build_view
+from montaj.board_view import LockInfo, build_view
 from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
 from montaj.dashboard_cards import cards_html, legend_html
@@ -13,6 +14,7 @@ from montaj.models import ClipStatus, Niche, Source
 from tests.dashboard_helpers import _add_clip, _add_source, _imported
 
 _SAVED = ("transcript.json", "candidates.json", "rank.json")
+_NOW = datetime(2026, 11, 25, 12, tzinfo=UTC)
 
 
 def _cards(
@@ -21,9 +23,10 @@ def _cards(
     running: tuple[int, str] | None = None,
     operations: bool = True,
     ceiling: float = 0.5,
+    locks: dict[int, LockInfo] | None = None,
 ) -> str:
     rows = build_rows(Settings(data_dir=db_path.parent), running=running)
-    view = build_view(rows, source_ceiling=ceiling, run_ceiling=0.5)
+    view = build_view(rows, source_ceiling=ceiling, run_ceiling=0.5, locks=locks)
     ctx = BoardContext(
         operations,
         running,
@@ -31,7 +34,8 @@ def _cards(
         source_ceiling=ceiling,
         run_ceiling=0.5,
     )
-    return cards_html(view, rows, ctx, [row.snapshot.source_id for row in rows])
+    ids = [row.snapshot.source_id for row in rows]
+    return cards_html(view, rows, ctx, ids, now=_NOW)
 
 
 def _bar(html: str) -> str:
@@ -356,3 +360,45 @@ def test_running_card_says_what_is_running(db_path: Path) -> None:
     assert "<strong>Running Candidates</strong>" in html
     assert "This page refreshes while the job runs." in html
     assert "Nothing to run" not in html
+
+
+def test_locked_card(db_path: Path) -> None:
+    _confirm(db_path)
+    lock = LockInfo("pipeline", _NOW - timedelta(minutes=4))
+    html = _cards(db_path, locks={7: lock})
+    assert ">Locked<" in html
+    assert "Locked by pipeline. This lock is 4 minutes old." in html
+    assert '<button disabled class="button"' in html and ">Resume</button>" in html
+    assert "Locked by another command" in html and "/confirm" not in html
+
+
+def test_unreadable_lock_card(db_path: Path) -> None:
+    _confirm(db_path)
+    html = _cards(db_path, locks={7: LockInfo("", None)})
+    assert "Locked. The lock age is unknown." in html and "/confirm" not in html
+
+
+def test_over_budget_card(db_path: Path) -> None:
+    _add_failed(db_path)
+    _imported(db_path)
+    _spend(db_path, 2.0)
+    html = _cards(db_path, ceiling=2.0)
+    assert ">Over budget<" in html
+    assert "Over its $2.00 source ceiling. Paid stages are off for this source." in html
+    assert ">Retry</button>" in html and "Over the source ceiling" in html
+    assert "/confirm" not in html
+
+
+def test_over_budget_keeps_review_links(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path, *_SAVED)
+    _add_clip(db_path, ClipStatus.CHECKED)
+    _spend(db_path, 2.0)
+    html = _cards(db_path, ceiling=2.0)
+    assert 'href="/?source=7">' in html and "<button" not in html
+
+
+def test_read_only_locked_card_has_no_button(db_path: Path) -> None:
+    _confirm(db_path)
+    html = _cards(db_path, operations=False, locks={7: LockInfo("rank", None)})
+    assert "<button" not in html and "Locked by rank." in html

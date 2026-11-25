@@ -1,5 +1,6 @@
 """Active runs: one card per source with a state chip, a stage bar and one next action."""
 
+from datetime import UTC, datetime
 from html import escape
 
 from montaj.board import FIX_GUIDANCE, INGEST_STEP, BoardRow, CellState, StageCell
@@ -19,6 +20,12 @@ from montaj.dashboard_parts import (
     format_usd,
     link_button,
     permission_reason,
+)
+from montaj.dashboard_states import (
+    disabled_html,
+    lock_text,
+    over_budget_text,
+    withheld_reason,
 )
 from montaj.models import ClipStatus
 
@@ -70,19 +77,26 @@ def _notes_html(cells: tuple[StageCell, ...], said: str = "") -> str:
     return f'<ul class="cell-notes">{items}</ul>'
 
 
-def _resume_html(source_id: int, label: str, ctx: BoardContext) -> str:
-    """Resume or Retry spends API money, so it opens the cost confirmation."""
+def _resume_html(card: SourceCard, label: str, ctx: BoardContext) -> str:
+    """Resume or Retry spends API money, so it opens the cost confirmation.
+
+    A locked or over-budget source gets a disabled button and the reason.
+    """
+    source_id = card.source_id
+    reason = withheld_reason(card)
+    if reason:
+        return disabled_html(label, reason, source_id)
     if ctx.running is not None:
         return busy_html(label, ctx.running, source_id=source_id)
     return link_button(f"{BASE_PATH}/sources/{source_id}/confirm?stage=batch", label)
 
 
-def _action_html(row: BoardRow, ctx: BoardContext) -> str:
+def _action_html(card: SourceCard, row: BoardRow, ctx: BoardContext) -> str:
     action, source_id = row.action, row.snapshot.source_id
     if action is None:
         return ""
     if action.kind == "resume":
-        return _resume_html(source_id, action.label, ctx) if ctx.operations else ""
+        return _resume_html(card, action.label, ctx) if ctx.operations else ""
     target = {
         "review": f"/?source={source_id}",
         "export": f"/?source={source_id}&amp;ready=1",
@@ -155,16 +169,30 @@ def _bar_meta(card: SourceCard) -> str:
     return f'<p class="bar-meta"><span>{stage}</span><span>{budget}</span></p>'
 
 
-def _next_html(row: BoardRow, ctx: BoardContext, sentence: tuple[str, str]) -> str:
+def _state_html(card: SourceCard, now: datetime) -> str:
+    """The lock or budget state in words, above the stage notes."""
+    notes = []
+    if card.lock is not None:
+        notes.append(lock_text(card.lock, now))
+    if card.over_budget:
+        notes.append(over_budget_text(card))
+    return "".join(f'<p class="state-note">{escape(note)}</p>' for note in notes)
+
+
+def _next_html(
+    card: SourceCard, row: BoardRow, ctx: BoardContext, sentence: tuple[str, str]
+) -> str:
     bold, muted = sentence
     detail = f'<span class="secondary">{escape(muted)}</span>' if muted else ""
     return (
         f'<div class="next-step"><p class="next-line"><strong>{escape(bold)}</strong>'
-        f'{detail}</p><div class="next-action">{_action_html(row, ctx)}</div></div>'
+        f'{detail}</p><div class="next-action">{_action_html(card, row, ctx)}</div></div>'
     )
 
 
-def card_html(card: SourceCard, row: BoardRow, ctx: BoardContext) -> str:
+def card_html(
+    card: SourceCard, row: BoardRow, ctx: BoardContext, now: datetime | None = None
+) -> str:
     link = f"{BASE_PATH}/sources/{card.source_id}"
     sentence = _sentence(card, row)
     return (
@@ -174,8 +202,10 @@ def card_html(card: SourceCard, row: BoardRow, ctx: BoardContext) -> str:
         f'<h3><a href="{link}">{escape(card.title)}</a></h3>'
         f'<span class="secondary">#{card.source_id} · {escape(card.niche)}</span>'
         f"{badge(card.chip.label, card.chip.tone)}</div>"
-        f"{stage_bar_html(card)}{_bar_meta(card)}{_notes_html(row.cells, sentence[1])}"
-        f"{_next_html(row, ctx, sentence)}</div></li>"
+        f"{stage_bar_html(card)}{_bar_meta(card)}"
+        f"{_state_html(card, now or datetime.now(UTC))}"
+        f"{_notes_html(row.cells, sentence[1])}"
+        f"{_next_html(card, row, ctx, sentence)}</div></li>"
     )
 
 
@@ -191,13 +221,17 @@ def legend_html() -> str:
 
 
 def cards_html(
-    view: BoardView, rows: list[BoardRow], ctx: BoardContext, visible: list[int]
+    view: BoardView,
+    rows: list[BoardRow],
+    ctx: BoardContext,
+    visible: list[int],
+    now: datetime | None = None,
 ) -> str:
     """The cards of the visible sources, in board order, then the legend."""
     by_id = {row.snapshot.source_id: row for row in rows}
     wanted = set(visible)
     items = "".join(
-        card_html(card, by_id[card.source_id], ctx)
+        card_html(card, by_id[card.source_id], ctx, now)
         for card in view.cards
         if card.source_id in wanted
     )

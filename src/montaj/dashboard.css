@@ -193,6 +193,13 @@ code { font-size: .9em; color: var(--ink); }
 .meter::-moz-meter-bar { background: var(--accent); }
 .disk-low strong, .disk-low .secondary { color: var(--warning); }
 .refresh { justify-self: end; font-size: .82rem; font-weight: 620; }
+.run-limit { color: var(--warning); font-weight: 620; }
+.state-note { margin: .45rem 0 0; color: var(--warning); font-size: .78rem; font-weight: 560; }
+.failed-job { display: grid; gap: .45rem; margin-block: 1rem; padding: 1rem 1.05rem; border-left: 3px solid var(--warning); }
+.failed-job p { margin: 0; }
+.failed-job .next-action { justify-items: start; margin-top: .35rem; }
+.empty-board { display: grid; justify-items: start; gap: .6rem; padding: 1.6rem 1.05rem; }
+.empty-board p { margin: 0; color: var(--muted); }
 @media (max-width: 60rem) {
     .pipeline { grid-template-columns: minmax(0, 1fr); }
 }

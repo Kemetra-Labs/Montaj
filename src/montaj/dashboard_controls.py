@@ -40,12 +40,17 @@ def meter_html(summary: "Summary") -> str:
     spent = summary.run_spend
     left = max(ceiling - spent, 0.0)
     top, value = _meter_values(spent, ceiling)
+    reached = (
+        '<span class="secondary run-limit">Run ceiling reached</span>'
+        if spent >= ceiling
+        else ""
+    )
     return (
         '<div class="control meter-block"><span class="control-label">Run spend</span>'
         f'<meter class="meter" min="0" max="{top:g}" value="{value:g}" '
         'aria-label="Run spend against the run ceiling"></meter>'
         f'<span class="secondary">{_money(spent)} of {_money(ceiling)} · '
-        f"{_money(left)} left</span></div>"
+        f"{_money(left)} left</span>{reached}</div>"
     )
 
 
