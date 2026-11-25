@@ -89,9 +89,9 @@ code { font-size: .9em; color: var(--ink); }
 .warning, .notice { background: var(--warning-bg); color: var(--warning); }
 .review { background: var(--review-bg); color: var(--review); }
 .success { background: var(--success-bg); color: var(--success); }
-.resources dl > div, .facts div { display: grid; gap: .18rem; padding: .72rem 1.05rem; border-top: 1px solid var(--stroke); }
-.resources dt, .facts dt { color: var(--muted); font-size: .74rem; }
-.resources dd, .facts dd { color: var(--ink); font-size: .9rem; font-weight: 620; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.facts div { display: grid; gap: .18rem; padding: .72rem 1.05rem; border-top: 1px solid var(--stroke); }
+.facts dt { color: var(--muted); font-size: .74rem; }
+.facts dd { color: var(--ink); font-size: .9rem; font-weight: 620; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-bottom: 1rem; overflow: hidden; background: var(--stroke); }
 .stat { display: grid; align-content: start; gap: .25rem; padding: .95rem 1.05rem; background: var(--surface); }
 .stat dt { color: var(--muted); font-size: .74rem; font-weight: 560; }
@@ -179,16 +179,18 @@ code { font-size: .9em; color: var(--ink); }
 .output-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; margin-top: .55rem; }
 .controls { display: grid; grid-template-columns: auto minmax(12rem, 1fr) minmax(10rem, auto) auto; align-items: center; gap: 1rem 1.5rem; margin-top: 1rem; padding: 1rem 1.05rem; }
 .controls .job-panel { margin: 0; padding: 0; border: 0; background: none; }
-.controls .job-panel > summary { display: inline-flex; align-items: center; min-height: 2.75rem; padding: .35rem 1.1rem; border: 1px solid var(--accent); border-radius: .44rem; background: var(--accent); color: var(--accent-ink); font-size: .85rem; font-weight: 670; list-style: none; }
+.controls .job-panel > summary { justify-self: start; display: inline-flex; align-items: center; min-height: 2.75rem; padding: .35rem 1.1rem; border: 1px solid var(--accent); border-radius: .44rem; background: var(--accent); color: var(--accent-ink); font-size: .85rem; font-weight: 670; list-style: none; }
 .controls .job-panel > summary::-webkit-details-marker { display: none; }
 .controls .job-panel > summary:hover { background: oklch(93% .12 126); }
-.controls .job-panel[open] { grid-column: 1 / -1; order: 5; display: grid; gap: .8rem; padding-top: .9rem; border-top: 1px solid var(--stroke); }
+.controls .job-panel[open] { grid-column: 1 / -1; display: grid; gap: .8rem; }
 .control { display: grid; gap: .2rem; min-width: 0; }
 .control-label { color: var(--muted); font-size: .74rem; }
 .control strong { font-size: .95rem; font-weight: 650; font-variant-numeric: tabular-nums; }
 .control .secondary { margin: 0; font-variant-numeric: tabular-nums; }
-.meter { height: .55rem; border: 1px solid var(--stroke); border-radius: .3rem; background: var(--rail); overflow: hidden; }
-.meter > span { display: block; height: 100%; background: var(--accent); }
+.meter { appearance: none; display: block; width: 100%; height: .6rem; border: 1px solid var(--stroke); border-radius: .3rem; background: var(--rail); overflow: hidden; }
+.meter::-webkit-meter-bar { height: 100%; border: 0; border-radius: .3rem; background: var(--rail); }
+.meter::-webkit-meter-optimum-value, .meter::-webkit-meter-suboptimum-value, .meter::-webkit-meter-even-less-good-value { background: var(--accent); }
+.meter::-moz-meter-bar { background: var(--accent); }
 .disk.warning strong, .disk.warning .secondary { color: var(--warning); }
 .refresh { justify-self: end; font-size: .82rem; font-weight: 620; }
 @media (max-width: 60rem) {

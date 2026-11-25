@@ -27,28 +27,27 @@ def _text(html: str) -> str:
 def test_idle_meter_shows_the_ceiling_only() -> None:
     html = meter_html(_summary())
     assert "Run ceiling $0.50" in _text(html) and "No job running" in html
-    assert 'role="meter"' not in html
+    assert "<meter" not in html
 
 
 def test_running_meter() -> None:
     html = meter_html(_summary(0.12))
     assert "Run spend $0.12 of $0.50 · $0.38 left" in _text(html)
-    assert 'role="meter"' in html
-    assert 'aria-valuenow="0.12"' in html and 'aria-valuemax="0.5"' in html
-    assert 'style="width: 24%"' in html
+    assert '<meter class="meter" min="0" max="0.5" value="0.12"' in html
+    assert "style=" not in html  # the server's CSP blocks inline styles
 
 
 @pytest.mark.parametrize(
-    ("spent", "ceiling", "width", "left"),
+    ("spent", "ceiling", "bounds", "left"),
     [
-        (0.7, 0.5, "100%", "$0.00 left"),
-        (0.0, 0.0, "0%", "$0.00 left"),
-        (0.1, 0.0, "100%", "$0.00 left"),
+        (0.7, 0.5, 'max="0.5" value="0.5"', "$0.00 left"),
+        (0.0, 0.0, 'max="1" value="0"', "$0.00 left"),
+        (0.1, 0.0, 'max="1" value="1"', "$0.00 left"),
     ],
 )
-def test_meter_bounds(spent: float, ceiling: float, width: str, left: str) -> None:
+def test_meter_bounds(spent: float, ceiling: float, bounds: str, left: str) -> None:
     html = meter_html(_summary(spent, ceiling))
-    assert f'style="width: {width}"' in html and left in html
+    assert bounds in html and left in html
 
 
 def test_meter_escapes_a_tiny_spend() -> None:

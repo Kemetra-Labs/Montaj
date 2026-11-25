@@ -20,11 +20,14 @@ def _money(amount: float) -> str:
     return escape(format_usd(amount))
 
 
-def _width(spent: float, ceiling: float) -> int:
-    """Percent of the ceiling spent, never above 100 and never a division by zero."""
+def _meter_values(spent: float, ceiling: float) -> tuple[float, float]:
+    """`max` and `value` for a native <meter>: value within 0..max, max above 0.
+
+    A native meter needs no inline style, which the server's CSP blocks.
+    """
     if ceiling > 0:
-        return round(min(max(spent, 0.0) / ceiling, 1.0) * 100)
-    return 0 if spent <= 0 else 100
+        return ceiling, min(max(spent, 0.0), ceiling)
+    return 1.0, 0.0 if spent <= 0 else 1.0
 
 
 def meter_html(summary: "Summary") -> str:
@@ -36,11 +39,11 @@ def meter_html(summary: "Summary") -> str:
         )
     spent = summary.run_spend
     left = max(ceiling - spent, 0.0)
+    top, value = _meter_values(spent, ceiling)
     return (
         '<div class="control meter-block"><span class="control-label">Run spend</span>'
-        f'<div class="meter" role="meter" aria-label="Run spend against the run ceiling" '
-        f'aria-valuemin="0" aria-valuemax="{ceiling:g}" aria-valuenow="{spent:g}">'
-        f'<span style="width: {_width(spent, ceiling)}%"></span></div>'
+        f'<meter class="meter" min="0" max="{top:g}" value="{value:g}" '
+        'aria-label="Run spend against the run ceiling"></meter>'
         f'<span class="secondary">{_money(spent)} of {_money(ceiling)} · '
         f"{_money(left)} left</span></div>"
     )

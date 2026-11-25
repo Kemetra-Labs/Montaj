@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from montaj.budget import Budget
 from montaj.config import Settings
 from montaj.costs import cost_totals
+from montaj.dashboard_controls import controls_html
 from montaj.dashboard_detail import live_panel_html, render_detail
 from montaj.dashboard_header import header_html, summary_html
 from montaj.dashboard_new_job import new_job_html
@@ -208,9 +209,9 @@ def _overview(
         for key, (label, items) in views.items()
     )
     try:
-        space = f"{disk_free(settings.data_dir) / 1024**3:.1f} GB free"
+        free_bytes: int | None = disk_free(settings.data_dir)
     except OSError:
-        space = "Disk space unavailable"
+        free_bytes = None
     results = (
         cards_html(data, board, ctx, [row.snapshot.source_id for row in visible])
         if visible
@@ -225,13 +226,13 @@ def _overview(
     return render_board_page(
         "Pipeline Control",
         f"""{header_html(ctx.running is not None)}
-{notice}{live_panel_html(ctx.live)}{new_job_html(ctx)}{topbar}
+{notice}{live_panel_html(ctx.live)}{topbar}
 <div class="pipeline">
 <section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Active runs</h2>
 <nav class="filters" aria-label="Filter sources">{filters}</nav></div>{results}</section>
-<aside class="side" aria-label="Recent outputs and resources"><section class="panel recent"><div class="section-heading"><h2>Recent outputs</h2></div>
-{_UNREADABLE if outputs_failed else outputs_html(data.outputs, datetime.now())}</section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
-<dl><div><dt>Data volume</dt><dd>{space}</dd></div></dl></section></aside></div>""",
+<aside class="side" aria-label="Recent outputs"><section class="panel recent"><div class="section-heading"><h2>Recent outputs</h2></div>
+{_UNREADABLE if outputs_failed else outputs_html(data.outputs, datetime.now())}</section></aside></div>
+{controls_html(data.summary, new_job_html(ctx), view, free_bytes, settings.min_free_mb)}""",
         refresh=ctx.running is not None,
     )
 

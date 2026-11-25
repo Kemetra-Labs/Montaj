@@ -117,7 +117,9 @@ def test_home_header(db_path: Path) -> None:
     assert page.count("<h1") == 1 and "<h1>Pipeline Control</h1>" in page
     assert "Montaj" in page and "<title>Pipeline Control · Montaj</title>" in page
     assert 'class="rail"' not in page
-    assert "Production board" not in page and "Refresh" not in page
+    assert "Production board" not in page
+    header = page.split('<header class="page-head">', 1)[1].split("</header>", 1)[0]
+    assert "Refresh" not in header
 
 
 def test_live_indicator_only_while_a_job_runs(db_path: Path) -> None:

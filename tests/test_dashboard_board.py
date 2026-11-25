@@ -521,7 +521,7 @@ def test_home_grid_and_placeholder(db_path: Path) -> None:
     assert 'class="pipeline"' in page and "Active runs" in page
     for view in ("all", "attention", "review"):
         assert f"view={view}" in page
-    assert "Recent outputs" in page and "Data volume" in page
+    assert "Recent outputs" in page and "Resources" not in page
     assert "Workload" not in page and "work-item" not in page
 
 
@@ -676,3 +676,44 @@ def test_a_malformed_clip_row_does_not_take_the_board_down(db_path: Path) -> Non
     assert status == 200
     page = body.decode()
     assert "Recent outputs could not be read." in page and "Active runs" in page
+
+
+def _controls(page: str) -> str:
+    return page.split('<section class="controls panel"', 1)[1].split("</section>", 1)[0]
+
+
+def test_controls_bar_is_last_and_holds_new_job(db_path: Path) -> None:
+    _add_source(db_path)
+    page = _home(db_path)
+    assert page.index('class="pipeline"') < page.index('class="controls panel"')
+    assert 'id="new-job"' in _controls(page)
+    assert page.count('id="new-job"') == 1
+    assert "Data volume" in _controls(page) and ">Refresh</a>" in _controls(page)
+
+
+def test_disk_read_failure_still_renders_the_board(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(path: Path) -> int:
+        raise OSError("no volume")
+
+    monkeypatch.setattr("montaj.dashboard.disk_free", broken)
+    _add_source(db_path)
+    status, _, body = dashboard_response(
+        Settings(data_dir=db_path.parent), "/dashboard", ""
+    )
+    assert status == 200 and b"Disk space unavailable" in body
+
+
+def test_running_board_shows_the_meter(db_path: Path) -> None:
+    _add_source(db_path)
+    controls = _controls(_home(db_path, running=(7, "render"), run_spend=(0.12, 0.5)))
+    assert '<meter class="meter"' in controls
+    assert "$0.12 of $0.50 · $0.38 left" in controls
+
+
+def test_read_only_board_controls(db_path: Path) -> None:
+    _add_source(db_path)
+    controls = _controls(_home(db_path, operations=False))
+    assert "new-job" not in controls and "<form" not in controls
+    assert "Run ceiling" in controls and ">Refresh</a>" in controls
