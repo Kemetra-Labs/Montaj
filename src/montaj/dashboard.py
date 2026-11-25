@@ -50,7 +50,6 @@ class SourceSnapshot:
     added: str
     allowed: bool
     basis: str | None
-    state: str
     tone: str
     problem: str | None
     media: str
@@ -103,19 +102,19 @@ def _snapshot(
         or clips[ClipStatus.NEEDS_FIX]
         or media in {"Metadata unreadable", "Media unavailable"}
     ):
-        state, tone = "Needs attention", "warning"
+        tone = "warning"
     elif clips[ClipStatus.CHECKED]:
-        state, tone = "Awaiting review", "review"
+        tone = "review"
     elif clips[ClipStatus.APPROVED]:
-        state, tone = "Approved", "success"
+        tone = "success"
     elif clips[ClipStatus.EXPORTED] or clips[ClipStatus.POSTED]:
-        state, tone = "Exported or posted", "success"
+        tone = "success"
     elif media == "Imported":
-        state, tone = "Imported", "success"
+        tone = "success"
     elif media == "Media missing":
-        state, tone = media, "warning"
+        tone = "warning"
     else:
-        state, tone = "Awaiting ingest", "neutral"
+        tone = "neutral"
     title = source.title.strip()
     if not title or title in {source.url, source.path} or "://" in title:
         title = f"Source {source.id}"
@@ -126,7 +125,6 @@ def _snapshot(
         source.added_at.strftime("%Y-%m-%d"),
         source.source_allowed,
         source.allowed_basis,
-        state,
         tone,
         problem,
         media,

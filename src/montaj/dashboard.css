@@ -10,6 +10,7 @@
     --muted: oklch(73% .025 276);
     --accent: oklch(89% .17 126);
     --accent-ink: oklch(23% .06 126);
+    --accent-hover: oklch(93% .12 126);
     --warning: oklch(87% .119 76);
     --warning-bg: oklch(31% .053 71);
     --review: oklch(86% .079 292);
@@ -59,7 +60,7 @@ code { font-size: .9em; color: var(--ink); }
 .button:disabled { opacity: .45; cursor: not-allowed; }
 .button:disabled:hover { background: var(--surface); border-color: var(--stroke); }
 .primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
-.primary:hover { background: oklch(93% .12 126); }
+.primary:hover { background: var(--accent-hover); }
 .job-panel { display: grid; gap: .8rem; margin-block: 1rem; padding: 1rem; }
 .job-panel > summary { cursor: pointer; font-weight: 670; }
 .job-form { display: grid; gap: .7rem; justify-items: start; }
@@ -131,7 +132,6 @@ code { font-size: .9em; color: var(--ink); }
 .stage-action button:disabled { cursor: not-allowed; opacity: .6; }
 .estimate { margin: 0; padding-left: 1.2rem; font-size: .88rem; }
 .empty-copy { border-top: 1px solid var(--stroke); padding: .9rem 1.05rem; color: var(--muted); font-size: .85rem; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .cards { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--stroke); }
 .card { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: 1rem; padding: 1rem 1.05rem; border-bottom: 1px solid var(--stroke); }
@@ -181,7 +181,7 @@ code { font-size: .9em; color: var(--ink); }
 .controls .job-panel { margin: 0; padding: 0; border: 0; background: none; }
 .controls .job-panel > summary { justify-self: start; display: inline-flex; align-items: center; min-height: 2.75rem; padding: .35rem 1.1rem; border: 1px solid var(--accent); border-radius: .44rem; background: var(--accent); color: var(--accent-ink); font-size: .85rem; font-weight: 670; list-style: none; }
 .controls .job-panel > summary::-webkit-details-marker { display: none; }
-.controls .job-panel > summary:hover { background: oklch(93% .12 126); }
+.controls .job-panel > summary:hover { background: var(--accent-hover); }
 .controls .job-panel[open] { grid-column: 1 / -1; display: grid; gap: .8rem; }
 .control { display: grid; gap: .2rem; min-width: 0; }
 .control-label { color: var(--muted); font-size: .74rem; }

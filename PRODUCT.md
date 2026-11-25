@@ -24,7 +24,7 @@ Stages are separate commands that read and write files: ingest, transcribe, cand
 
 ## Capabilities and Constraints
 
-- Existing surfaces: the read-only production board at `/dashboard`, a source detail page, a jobs page that starts and retries one job at a time behind a same-origin form token, and the clip preview at `/` with review controls.
+- Existing surfaces: the Pipeline Control board at `/dashboard` (read only under `preview serve`), which starts, resumes and retries one job at a time behind a same-origin form token; a source page with Run, Retry and Rerun per stage; and the clip preview at `/` with review controls.
 - The board must keep to loopback, require a same-origin token for every write, and never skip the `source_allowed` permission, the compliance check or human review.
 - Paid stages show an estimated cost and need a confirm click. Free stages run on one click.
 - Approve and reject stay in the clip preview. The board shows review counts and links to it.

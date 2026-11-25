@@ -1,6 +1,6 @@
 # Control board design
 
-Status: draft for approval. Product context: [PRODUCT.md](../../../PRODUCT.md).
+Status: built. Its look was replaced by Board v2 (Jira MJ-21) on 2026-11-25; its behaviour stands. Product context: [PRODUCT.md](../../../PRODUCT.md).
 
 ## Intent
 

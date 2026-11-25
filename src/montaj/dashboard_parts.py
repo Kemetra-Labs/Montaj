@@ -7,7 +7,6 @@ from html import escape
 BASE_PATH = "/dashboard"
 STAGE_PATH = f"{BASE_PATH}/stage"
 JOBS_LINK = f"{BASE_PATH}/jobs"
-NEW_JOB_LINK = "#new-job"
 _REFRESH_SECONDS = 3
 STATE_LABELS = {
     "done": "Done",
