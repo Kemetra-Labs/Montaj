@@ -4,11 +4,11 @@ from typing import Any
 
 import pytest
 
-from montaj import engine
+from montaj import check, engine
 from montaj.board_view import OUTPUT_SIZE, check_note, recent_outputs
 from montaj.config import Settings
 from montaj.db import connect, insert
-from montaj.models import CheckResult, Clip, ClipStatus, Niche, Source
+from montaj.models import CampaignRules, CheckResult, Clip, ClipStatus, Niche, Source
 from tests.dashboard_helpers import _add_source
 
 
@@ -220,3 +220,22 @@ def test_record_knows_whether_the_preview_lists_the_clip(db_path: Path) -> None:
     _clip(db_path, 6, ClipStatus.POSTED, final_path="clips/6/final.mp4")
     by_id = {record.clip_id: record.in_preview for record in _outputs(db_path)}
     assert by_id == {4: True, 5: False, 6: False}
+
+
+def test_check_note_handles_reasons_that_contain_the_separator() -> None:
+    cap = check.daily_cap_failure(
+        CampaignRules(min_seconds=20, max_seconds=60, max_posts_per_day=3), 3
+    )
+    assert cap is not None
+    assert check_note(cap.reason) == "The daily post cap is reached."
+    length = "Length 75.00s is outside 20.00-60.00s."
+    assert check_note(f"{length}; {cap.reason}") == (
+        "Length is outside the allowed range. The daily post cap is reached."
+    )
+    assert (
+        check_note("Matches banned word or topic: a; b")
+        == "Uses a banned word or topic."
+    )
+    assert check_note("Strong opening; Length 75.00s is outside 20.00-60.00s.") == (
+        "Open the clip preview to see why. Length is outside the allowed range."
+    )

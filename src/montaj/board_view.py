@@ -3,6 +3,7 @@
 Plain functions and frozen dataclasses with no HTML, so a page only renders them.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -252,21 +253,31 @@ _CHECK_NOTES = (
     ("This clip was already posted.", "This clip was already posted."),
     ("No matching account", "No account matches the daily post cap."),
     ("Possible medical claim", "Possible medical claim or promise."),
+    ("Daily post cap is ", "The daily post cap is reached."),
 )
 _UNKNOWN_CHECK = "Open the clip preview to see why."
 
 
 def check_note(reason: str | None) -> str:
-    """Fixed sentences for the failed rules in a stored reason, once each."""
+    """Fixed sentences for the failed rules in a stored reason, once each.
+
+    `check.py` joins rule reasons with "; ", and a reason can hold "; " itself
+    (the daily cap, a banned term), so known rule starts are found in place and
+    the text up to the next one belongs to them. Text before the first known
+    start, or with none, is unknown and gets one fixed sentence.
+    """
+    text = (reason or "").strip()
+    if not text:
+        return ""
+    starts = sorted(
+        (match.start(1), note)
+        for start, note in _CHECK_NOTES
+        for match in re.finditer(rf"(?:^|; )({re.escape(start)})", text)
+    )
     notes: dict[str, None] = {}
-    for part in (reason or "").split("; "):
-        part = part.strip()
-        if not part:
-            continue
-        note = next(
-            (text for start, text in _CHECK_NOTES if part.startswith(start)),
-            _UNKNOWN_CHECK,
-        )
+    if not starts or starts[0][0] > 0:
+        notes[_UNKNOWN_CHECK] = None
+    for _, note in starts:
         notes[note] = None
     return " ".join(notes)
 

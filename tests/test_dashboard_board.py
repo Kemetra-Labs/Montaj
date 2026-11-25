@@ -663,3 +663,16 @@ def test_unreadable_media_path_does_not_break_the_board(db_path: Path) -> None:
         Settings(data_dir=db_path.parent), "/dashboard", ""
     )
     assert status == 200 and b"Clip 4" in body
+
+
+def test_a_malformed_clip_row_does_not_take_the_board_down(db_path: Path) -> None:
+    _add_source(db_path)
+    _final_clip(db_path, 4)
+    with connect(db_path) as db:
+        db.execute("UPDATE clips SET hashtags = '{not json' WHERE id = 4")
+    status, _, body = dashboard_response(
+        Settings(data_dir=db_path.parent), "/dashboard", ""
+    )
+    assert status == 200
+    page = body.decode()
+    assert "Recent outputs could not be read." in page and "Active runs" in page
