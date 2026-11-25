@@ -75,8 +75,6 @@ class SourceCard:
     source_id: int
     title: str
     niche: str
-    state: str
-    tone: str
     segments: tuple[StageSegment, ...]
     action: NextAction | None
     cost: float
@@ -210,8 +208,6 @@ def _card(row: BoardRow, source_ceiling: float, lock: LockInfo | None) -> Source
         snapshot.source_id,
         snapshot.title,
         snapshot.niche,
-        snapshot.state,
-        snapshot.tone,
         segments,
         row.action,
         snapshot.cost,

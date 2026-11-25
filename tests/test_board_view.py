@@ -1,4 +1,5 @@
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,7 +29,6 @@ def _snapshot(**over: Any) -> SourceSnapshot:
         "added": "2026-11-24",
         "allowed": True,
         "basis": "Creator approval",
-        "state": "Imported",
         "tone": "success",
         "problem": None,
         "media": "Imported",
@@ -163,14 +163,9 @@ def test_card_dollars_left_never_negative() -> None:
 
 def test_card_carries_the_row() -> None:
     action = NextAction("resume", "Resume")
-    row = _row(action, source_id=4, title="Interview", state="Imported", tone="success")
+    row = _row(action, source_id=4, title="Interview")
     card = build_view([row], source_ceiling=1.0, run_ceiling=5.0).cards[0]
-    assert (card.source_id, card.title, card.state, card.tone) == (
-        4,
-        "Interview",
-        "Imported",
-        "success",
-    )
+    assert (card.source_id, card.title) == (4, "Interview")
     assert card.action == action
     assert len(card.segments) == len(STAGES)
 
@@ -322,3 +317,52 @@ def test_zero_ceiling_is_not_over_budget() -> None:
     row = _states(_D, _D, _P, _P, _P, _P, _P, cost=0.0)
     card = build_view([row], source_ceiling=0.0, run_ceiling=0.5).cards[0]
     assert not card.over_budget
+
+
+def _tone(db_path: Path, setup: str) -> str:
+    from montaj.config import Settings
+    from montaj.dashboard import _load
+    from tests.dashboard_helpers import _add_clip, _add_source, _imported
+
+    _add_source(db_path)
+    statuses = {
+        "flagged": ClipStatus.NEEDS_FIX,
+        "checked": ClipStatus.CHECKED,
+        "approved": ClipStatus.APPROVED,
+        "exported": ClipStatus.EXPORTED,
+    }
+    if setup != "awaiting ingest":
+        _imported(db_path)
+    if setup == "media missing":
+        (db_path.parent / "sources/7/video.mp4").unlink()
+    if setup in statuses:
+        _add_clip(db_path, statuses[setup])
+    return _load(Settings(data_dir=db_path.parent), None)[0].tone
+
+
+@pytest.mark.parametrize(
+    ("setup", "tone"),
+    [
+        ("flagged", "warning"),
+        ("checked", "review"),
+        ("approved", "success"),
+        ("exported", "success"),
+        ("imported", "success"),
+        ("media missing", "warning"),
+        ("awaiting ingest", "neutral"),
+    ],
+)
+def test_snapshot_tones_are_unchanged(db_path: Path, setup: str, tone: str) -> None:
+    assert _tone(db_path, setup) == tone
+
+
+def test_removed_names_are_gone() -> None:
+    from montaj import dashboard_parts
+    from montaj.board_view import SourceCard
+
+    assert not hasattr(dashboard_parts, "NEW_JOB_LINK")
+    assert "state" not in SourceSnapshot.__dataclass_fields__
+    fields = SourceCard.__dataclass_fields__
+    assert "state" not in fields and "tone" not in fields
+    css = Path("src/montaj/dashboard.css").read_text(encoding="utf-8")
+    assert ".sr-only" not in css
