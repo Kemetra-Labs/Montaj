@@ -177,10 +177,26 @@ code { font-size: .9em; color: var(--ink); }
 .output-note { margin-top: .3rem; color: var(--muted); font-size: .76rem; }
 .output-note.warning { background: none; color: var(--warning); }
 .output-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; margin-top: .55rem; }
+.controls { display: grid; grid-template-columns: auto minmax(12rem, 1fr) minmax(10rem, auto) auto; align-items: center; gap: 1rem 1.5rem; margin-top: 1rem; padding: 1rem 1.05rem; }
+.controls .job-panel { margin: 0; padding: 0; border: 0; background: none; }
+.controls .job-panel > summary { display: inline-flex; align-items: center; min-height: 2.75rem; padding: .35rem 1.1rem; border: 1px solid var(--accent); border-radius: .44rem; background: var(--accent); color: var(--accent-ink); font-size: .85rem; font-weight: 670; list-style: none; }
+.controls .job-panel > summary::-webkit-details-marker { display: none; }
+.controls .job-panel > summary:hover { background: oklch(93% .12 126); }
+.controls .job-panel[open] { grid-column: 1 / -1; order: 5; display: grid; gap: .8rem; padding-top: .9rem; border-top: 1px solid var(--stroke); }
+.control { display: grid; gap: .2rem; min-width: 0; }
+.control-label { color: var(--muted); font-size: .74rem; }
+.control strong { font-size: .95rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+.control .secondary { margin: 0; font-variant-numeric: tabular-nums; }
+.meter { height: .55rem; border: 1px solid var(--stroke); border-radius: .3rem; background: var(--rail); overflow: hidden; }
+.meter > span { display: block; height: 100%; background: var(--accent); }
+.disk.warning strong, .disk.warning .secondary { color: var(--warning); }
+.refresh { justify-self: end; font-size: .82rem; font-weight: 620; }
 @media (max-width: 60rem) {
     .pipeline { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 52rem) {
+    .controls { grid-template-columns: minmax(0, 1fr); }
+    .refresh { justify-self: start; }
     .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 58rem) {
