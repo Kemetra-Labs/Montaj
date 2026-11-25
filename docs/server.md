@@ -90,7 +90,18 @@ ssh -L 8765:127.0.0.1:8765 user@server
 
 Open `http://127.0.0.1:8765/` on the laptop. The tunnel ends at the server's loopback address. Do not change the preview bind address.
 
-Open `http://127.0.0.1:8765/dashboard` on the same tunnel for the operations view. `uv run montaj dashboard` prints that address and starts the same server when it is not already running. The dashboard reports saved checkpoints and recorded clip statuses. When it is started by `montaj dashboard`, stages and new jobs run from the board; the standalone `preview serve` stays read-only. Paid stages, **Resume** and **Retry** show an estimate and need one confirmation; **New job** asks you to accept the run and source ceilings, because no estimate exists before import. The board runs one job at a time, with no queue. Live status is held in memory, so after a restart it is gone: the row shows the saved checkpoints and Resume continues from them. The board counts a batch of the default 10 clips; use `montaj job --resume ID --top N` for another target. A source that is not imported, or whose ingest failed, is fixed from the terminal with `montaj ingest`. A language mismatch or too little usable speech is not retried from the board. One flagged clip does not block review or export of the others. Review decisions stay in the clip preview.
+Open `http://127.0.0.1:8765/dashboard` on the same tunnel for the operations view, the Pipeline Control board. `uv run montaj dashboard` prints that address and starts the same server when it is not already running.
+
+The board home shows:
+
+- a summary strip with API spend, the run ceiling or the running job's spend against it, sources needing attention and clips awaiting review;
+- one Active runs card per source, with its status chip, an 11-segment stage bar and one next action;
+- Recent outputs, linking into the clip preview;
+- a controls bar with New job, a read-only run ceiling meter and disk free.
+
+It also shows an empty, failed-job, locked-source or over-budget state when one applies. Each source page has the same header, the source's card, and Run, Retry or Rerun per stage. The board reports saved checkpoints and recorded clip statuses.
+
+When it is started by `montaj dashboard`, stages and new jobs run from the board; the standalone `preview serve` stays read-only. Paid stages, **Resume** and **Retry** show an estimate and need one confirmation; **New job** asks you to accept the run and source ceilings, because no estimate exists before import. The board runs one job at a time, with no queue. Live status is held in memory, so after a restart it is gone: the card shows the saved checkpoints and Resume continues from them. The board counts a batch of the default 10 clips; use `montaj job --resume ID --top N` for another target. A source that is not imported, or whose ingest failed, is fixed from the terminal with `montaj ingest`. A language mismatch or too little usable speech is not retried from the board. One flagged clip does not block review or export of the others. Review decisions stay in the clip preview.
 
 ## Backup
 
