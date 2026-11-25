@@ -177,7 +177,8 @@ def test_detail_shows_live_job_panel(db_path: Path) -> None:
     )
     finished = _detail_page(db_path, live=done)
     assert "Stopped during transcribe." in finished
-    assert "&lt;i&gt;Another process holds the lock (pid 5)&lt;/i&gt;" in finished
+    assert "Another process holds the lock" not in finished
+    assert "The job stopped. The details are in montaj.log" in finished
     assert "<i>" not in finished and 'http-equiv="refresh"' not in finished
     other = LiveJob(8, "x", True, 1, 0, "", "")
     assert "Live job" not in _detail_page(db_path, live=other)
@@ -394,8 +395,8 @@ def test_over_budget_stop_is_shown_on_detail(
     threads[0].join(timeout=5)
     page = handle_preview(settings, "/dashboard/sources/7", jobs)[2].decode()
     assert "Stopped during rank." in page
-    assert "per-run budget ceiling $0.500000" in page
-    assert "&lt;b&gt;stop&lt;/b&gt;" in page and "<b>stop" not in page
+    assert "The run ceiling was reached before the next paid call." in page
+    assert "budget ceiling $0.500000" not in page and "<b>stop" not in page
     assert ">Review clips</a>" not in page
 
 
@@ -525,3 +526,63 @@ def test_batch_confirm_hides_a_failed_estimate(
     status, body = _confirm(settings, JobQueue(settings), 7, "stage=batch")
     assert status == 200 and b"Estimate unavailable" in body
     assert b"<form" not in body and b"raw" not in body
+
+
+def _home_chip(db_path: Path) -> str:
+    home = dashboard_response(
+        Settings(data_dir=db_path.parent), "/dashboard", "", operations=True
+    )[2].decode()
+    card = home.split('<li class="card">', 1)[1]
+    return card.split('<span class="badge ', 1)[1].split(">", 1)[1].split("<", 1)[0]
+
+
+def test_source_page_uses_the_card_chip_and_stage_bar(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path)
+    with connect(db_path) as db:
+        log_api_call(db, 7, "transcribe", Service.DEEPGRAM, Usage(seconds=1), 0.012345)
+    page = _detail_page(db_path)
+    card = page.split('<section class="card source-card"', 1)[1].split("</section>")[0]
+    assert page.count("<h1") == 1 and "<h1>Interview</h1>" in card
+    assert f">{_home_chip(db_path)}</span>" in card
+    assert 'class="stage-bar"' in card and "Stage 2 of 11" in card
+    assert "Source spend $0.01 of $2.00 source ceiling" in card
+    assert 'href="/dashboard/sources/7">Refresh</a>' in card
+
+
+def test_source_page_columns(db_path: Path) -> None:
+    _add_source(db_path)
+    page = _detail_page(db_path)
+    grid = page.split('<div class="pipeline detail">', 1)[1]
+    stages, aside = grid.split('<aside class="side"', 1)
+    assert "<h2>Stages</h2>" in stages
+    names = ("Source information", "Clips", "Saved checkpoints")
+    order = [aside.index(name) for name in names]
+    assert order == sorted(order)
+
+
+def test_stage_lines_carry_a_segment_swatch(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path)
+    lines = _stage_lines(_detail_page(db_path))
+    assert 'class="seg done"' in lines["Ingest"] and "Done" in lines["Ingest"]
+    assert 'class="seg waiting"' in lines["Transcribe"]
+    assert "Pending" in lines["Transcribe"]
+    assert 'class="seg blocked"' in lines["Cut + captions"]
+
+
+def test_read_only_source_page_has_the_layout_and_no_controls(db_path: Path) -> None:
+    _add_source(db_path)
+    _imported(db_path)
+    page = _detail_page(db_path, operations=False)
+    assert "source-card" in page and 'class="stage-bar"' in page
+    assert "<form" not in page and "/confirm" not in page and "<button" not in page
+
+
+def test_live_panel_words_a_raw_problem(db_path: Path) -> None:
+    _add_source(db_path)
+    problem = r"<i>C:\x\y.mp4</i>"
+    live = LiveJob(7, "rank", False, 3.0, 0.1, "Stopped during rank.", problem)
+    page = _detail_page(db_path, live=live)
+    assert "The job stopped. The details are in montaj.log" in page
+    assert "y.mp4" not in page

@@ -25,6 +25,7 @@ from montaj.models import ClipStatus
 
 if TYPE_CHECKING:
     from montaj.board import BoardRow, StageCell
+    from montaj.board_view import SourceCard
     from montaj.dashboard import SourceSnapshot
     from montaj.stage_jobs import BoardStage
 
@@ -111,6 +112,12 @@ def _stage_note(cell: "StageCell") -> str:
     return ""
 
 
+def _swatch(state: str) -> str:
+    """The stage bar's segment for one line. A pending stage waits."""
+    word = "waiting" if state == "pending" else state
+    return f'<span class="seg {word}" aria-hidden="true"></span>'
+
+
 def _stage_line_html(row: "BoardRow", cell: "StageCell", ctx: BoardContext) -> str:
     source = row.snapshot
     state = cell.state.value
@@ -122,7 +129,7 @@ def _stage_line_html(row: "BoardRow", cell: "StageCell", ctx: BoardContext) -> s
     return (
         f'<li class="stage-line {state}"><div class="stage-info">'
         f'<span class="cell-name">{escape(cell.label)}</span>'
-        f'<span class="cell-state">{STATE_LABELS[state]}</span>'
+        f'<span class="cell-state">{_swatch(state)}{STATE_LABELS[state]}</span>'
         f"{_stage_note(cell)}</div>"
         f'<div class="stage-action">{action}</div></li>'
     )
@@ -149,7 +156,10 @@ def live_panel_html(live: LiveJob | None, source_id: int | None = None) -> str:
         heading, body = f"Running: {live.stage}", ""
     else:
         heading, body = "Latest job", f"<p>{escape(live.summary)}</p>"
-    problem = f"<p>{escape(live.problem)}</p>" if live.problem else ""
+    from montaj.board_view import job_problem_note  # board imports this module
+
+    note = job_problem_note(live.problem)
+    problem = f"<p>{escape(note)}</p>" if note else ""
     review = ""
     if live.source_id is not None and not live.running and not live.problem:
         review = (
@@ -179,14 +189,42 @@ def _preview_link(source: "SourceSnapshot") -> str:
     )
 
 
-def _detail_header(source: "SourceSnapshot", ctx: BoardContext) -> str:
+def _source_card(row: "BoardRow", ctx: BoardContext) -> "SourceCard":
+    """The source as the board home's card sees it: chip, stages and budget."""
+    from montaj.board_view import build_view  # board imports this module
+
+    view = build_view(
+        [row], source_ceiling=ctx.source_ceiling, run_ceiling=ctx.run_ceiling
+    )
+    return view.cards[0]
+
+
+def _detail_header(row: "BoardRow", ctx: BoardContext) -> str:
+    """The source card: title, chip, the 11-stage bar and the budget line."""
+    from montaj.board_view import PAID_STAGE_KEYS
+    from montaj.dashboard_cards import stage_bar_html
+
+    source = row.snapshot
+    card = _source_card(row, ctx)
     campaign = f" · Campaign: {escape(ctx.campaign)}" if ctx.campaign else ""
-    spend = f"Source spend {format_usd(source.cost)} of ${ctx.source_ceiling:.2f} source ceiling"
+    segment = card.segments[card.current]
+    cost = "paid" if segment.key in PAID_STAGE_KEYS else "free"
+    stage = (
+        f"Stage {card.current + 1} of {len(card.segments)} · "
+        f"{escape(segment.label)} · {cost} stage"
+    )
+    spend = (
+        f"Source spend {escape(format_usd(source.cost))} of "
+        f"${ctx.source_ceiling:.2f} source ceiling · "
+        f"{escape(format_usd(card.left))} left"
+    )
     return (
-        f'<div class="heading"><div><div class="eyebrow">Source #{source.source_id} · {source.niche}{campaign}</div>'
-        f'<h1>{escape(source.title)}</h1><p class="secondary">{spend}</p></div>'
-        f'<div class="toolbar">{badge(source.state, source.tone)}'
-        f'<a class="button" href="{_detail_path(source.source_id)}">Refresh</a></div></div>'
+        '<section class="card source-card" aria-label="Source"><div class="card-head">'
+        f"<h1>{escape(source.title)}</h1>{badge(card.chip.label, card.chip.tone)}</div>"
+        f'<p class="secondary">#{source.source_id} · {escape(source.niche)}{campaign}</p>'
+        f'{stage_bar_html(card)}<p class="bar-meta"><span>{stage}</span>'
+        f"<span>{spend}</span></p>"
+        f'<a class="refresh" href="{_detail_path(source.source_id)}">Refresh</a></section>'
     )
 
 
@@ -227,14 +265,14 @@ def render_detail(row: "BoardRow", ctx: BoardContext) -> bytes:
     return render_page(
         source.title,
         f"""<a class="back" href="/dashboard">← Pipeline Control</a>
-{_detail_header(source, ctx)}
-{_notice_html(source)}<div class="board detail">
-<div class="side">{live_panel_html(ctx.live, source.source_id)}{_stages_html(row, ctx)}
-<section class="panel"><div class="section-heading"><h2>Saved checkpoints</h2></div><ol class="steps timeline">{checkpoints}</ol></section></div>
-<div class="side"><section class="panel"><div class="section-heading"><h2>Source information</h2></div>
+{_detail_header(row, ctx)}
+{_notice_html(source)}{live_panel_html(ctx.live, source.source_id)}<div class="pipeline detail">
+{_stages_html(row, ctx)}
+<aside class="side" aria-label="Source details"><section class="panel"><div class="section-heading"><h2>Source information</h2></div>
 <dl class="facts"><div><dt>Permission</dt><dd>{basis}</dd></div><div><dt>Added</dt><dd>{source.added}</dd></div>
-<div><dt>Duration</dt><dd>{source.duration or "Unknown"}</dd></div><div><dt>Est. API cost</dt><dd>{format_usd(source.cost)}</dd></div></dl></section>
-<section class="panel"><div class="section-heading"><h2>Clips</h2>{_preview_link(source)}</div>{clip_list}</section></div></div>""",
+<div><dt>Duration</dt><dd>{source.duration or "Unknown"}</dd></div><div><dt>Est. API cost</dt><dd>{escape(format_usd(source.cost))}</dd></div></dl></section>
+<section class="panel"><div class="section-heading"><h2>Clips</h2>{_preview_link(source)}</div>{clip_list}</section>
+<section class="panel"><div class="section-heading"><h2>Saved checkpoints</h2></div><ol class="steps timeline">{checkpoints}</ol></section></aside></div>""",
         live=ctx.running is not None,
         refresh=ctx.running is not None,
     )
