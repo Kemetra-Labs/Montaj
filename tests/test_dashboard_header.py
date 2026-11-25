@@ -1,11 +1,15 @@
 import re
+import sqlite3
 from pathlib import Path
+
+import pytest
 
 from montaj.config import Settings
 from montaj.costs import Service, Usage, log_api_call
-from montaj.dashboard import dashboard_response
+from montaj.dashboard_jobs import JobQueue
 from montaj.db import connect, insert
 from montaj.models import ClipStatus, Niche, Source
+from montaj.preview import handle_preview
 from tests.dashboard_helpers import _add_clip, _add_source, _home
 
 
@@ -135,9 +139,56 @@ def test_read_only_home_has_no_new_job_panel_or_live_indicator(db_path: Path) ->
     assert 'class="summary' in page
 
 
-def test_other_pages_keep_the_rail(db_path: Path) -> None:
+def _pages(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Every kind of dashboard page, by name."""
     _add_source(db_path)
     settings = Settings(data_dir=db_path.parent)
-    for path in ("/dashboard/sources/7", "/dashboard/sources/99"):
-        _, _, body = dashboard_response(settings, path, "")
-        assert b'class="rail"' in body
+    jobs = JobQueue(settings)
+
+    def estimate(*args: object) -> list[str]:
+        return ["rank: $0.120000"]
+
+    def get(path: str) -> str:
+        return handle_preview(settings, path, jobs)[2].decode()
+
+    monkeypatch.setattr("montaj.dashboard_jobs.estimate_run", estimate)
+    pages = {
+        "home": get("/dashboard"),
+        "source": get("/dashboard/sources/7"),
+        "confirm": get("/dashboard/sources/7/confirm?stage=rank"),
+        "not found": get("/dashboard/sources/99"),
+    }
+
+    def broken(*args: object) -> list[str]:
+        raise ValueError("raw")
+
+    monkeypatch.setattr("montaj.dashboard_jobs.estimate_run", broken)
+    pages["unavailable"] = get("/dashboard/sources/7/confirm?stage=rank")
+
+    def no_db(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("no db")
+
+    monkeypatch.setattr("montaj.board.build_rows", no_db)
+    pages["503"] = get("/dashboard")
+    return pages
+
+
+def test_every_page_has_one_h1_and_no_rail(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name, page in _pages(db_path, monkeypatch).items():
+        assert page.count("<h1") == 1, name
+        assert '<header class="page-head">' in page, name
+        assert 'class="rail"' not in page and "Production board" not in page, name
+
+
+def test_other_pages_link_home_in_the_header(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pages = _pages(db_path, monkeypatch)
+    for name in ("source", "confirm", "unavailable", "not found", "503"):
+        head = pages[name].split('<header class="page-head">', 1)[1]
+        head = head.split("</header>", 1)[0]
+        assert '<a class="page-name" href="/dashboard">Pipeline Control</a>' in head
+        assert "<h1" not in head, name
+    assert "<h1>Pipeline Control</h1>" in pages["home"]

@@ -3,6 +3,7 @@
 from html import escape
 from typing import TYPE_CHECKING
 
+from montaj.dashboard_header import render_page
 from montaj.dashboard_parts import (
     BASE_PATH,
     JOBS_LINK,
@@ -18,7 +19,6 @@ from montaj.dashboard_parts import (
     link_button,
     parse_source_id,
     permission_reason,
-    render_dashboard_page,
 )
 from montaj.job import DEFAULT_TARGET
 from montaj.models import ClipStatus
@@ -224,9 +224,9 @@ def render_detail(row: "BoardRow", ctx: BoardContext) -> bytes:
         if clips
         else '<p class="empty-copy">No clips recorded yet.</p>'
     )
-    return render_dashboard_page(
+    return render_page(
         source.title,
-        f"""<a class="back" href="/dashboard">← Source queue</a>
+        f"""<a class="back" href="/dashboard">← Pipeline Control</a>
 {_detail_header(source, ctx)}
 {_notice_html(source)}<div class="board detail">
 <div class="side">{live_panel_html(ctx.live, source.source_id)}{_stages_html(row, ctx)}
@@ -235,7 +235,7 @@ def render_detail(row: "BoardRow", ctx: BoardContext) -> bytes:
 <dl class="facts"><div><dt>Permission</dt><dd>{basis}</dd></div><div><dt>Added</dt><dd>{source.added}</dd></div>
 <div><dt>Duration</dt><dd>{source.duration or "Unknown"}</dd></div><div><dt>Est. API cost</dt><dd>{format_usd(source.cost)}</dd></div></dl></section>
 <section class="panel"><div class="section-heading"><h2>Clips</h2>{_preview_link(source)}</div>{clip_list}</section></div></div>""",
-        'aria-current="location"',
+        live=ctx.running is not None,
         refresh=ctx.running is not None,
     )
 
@@ -245,15 +245,15 @@ def _confirm_page(
 ) -> bytes:
     """Estimate lines and the one click that accepts their cost."""
     items = "".join(f"<li>{escape(line)}</li>" for line in lines)
-    return render_dashboard_page(
+    return render_page(
         "Confirm cost",
         f"""<a class="back" href="{_detail_path(source_id)}">← Source #{source_id}</a>
-<div class="heading"><h1>Confirm cost</h1></div>
-<section class="panel job-panel"><h2>{escape(heading)} for source #{source_id}</h2>
+<h1 class="page-title">Confirm cost</h1>
+<section class="panel confirm"><h2>{escape(heading)} for source #{source_id}</h2>
 <ul class="estimate">{items}</ul>
-<form class="job-form" action="{action}" method="post">{fields}
+<div class="confirm-actions"><form class="job-form" action="{action}" method="post">{fields}
 <button class="button primary">Confirm and run</button></form>
-<a class="button" href="{_detail_path(source_id)}">Cancel</a></section>""",
+<a class="button" href="{_detail_path(source_id)}">Cancel</a></div></section>""",
     )
 
 
@@ -281,10 +281,10 @@ def render_batch_confirm(source_id: int, lines: list[str], token: str) -> bytes:
 
 def render_confirm_unavailable(source_id: int) -> bytes:
     """No estimate, so nothing to confirm. Only a way back."""
-    return render_dashboard_page(
+    return render_page(
         "Confirm cost",
         f"""<a class="back" href="{_detail_path(source_id)}">← Source #{source_id}</a>
-<div class="heading"><h1>Confirm cost</h1></div>
-<section class="panel job-panel"><p>Estimate unavailable. Check the source before running this stage.</p>
-<a class="button" href="{_detail_path(source_id)}">Back to source</a></section>""",
+<h1 class="page-title">Confirm cost</h1>
+<section class="panel confirm"><p>Estimate unavailable. Check the source before running this stage.</p>
+<div class="confirm-actions"><a class="button" href="{_detail_path(source_id)}">Back to source</a></div></section>""",
     )
