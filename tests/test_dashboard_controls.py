@@ -59,7 +59,7 @@ def test_disk_free() -> None:
     assert "12.3 GB free" in disk_html(int(12.3 * _GB), 1024)
     assert "Disk space unavailable" in disk_html(None, 1024)
     low = disk_html(512 * 1024**2, 1024)
-    assert 'class="control disk warning"' in low
+    assert 'class="control disk disk-low"' in low
     assert "Below the 1024 MB warning level" in low
     assert "warning" not in disk_html(int(12.3 * _GB), 1024)
 
@@ -84,3 +84,10 @@ def test_refresh_keeps_the_view() -> None:
 def test_no_ceiling_control() -> None:
     html = controls_html(_summary(0.1), _FORM, "all", 5 * _GB, 1024).replace(_FORM, "")
     assert "<input" not in html and "<button" not in html and "<form" not in html
+
+
+def test_low_disk_is_shown_in_megabytes() -> None:
+    low = disk_html(40 * 1024**2, 1024)
+    assert "40 MB free" in low and "GB free" not in low
+    assert "warning" not in disk_html(1024 * 1024**2, 1024)
+    assert "Below the 1024 MB warning level" in disk_html(1024 * 1024**2 - 1, 1024)

@@ -346,7 +346,8 @@ def test_new_job_error_rerenders_board_with_notice(db_path: Path) -> None:
     request.send_response.assert_called_once_with(400)
     page = request.wfile.getvalue().decode()
     message = "Enter an individual YouTube video URL or use the inbox."
-    assert f'<p class="notice" role="status">{message}</p>' in page
+    back = '<a href="#new-job">Back to the New job form</a>'
+    assert f'<p class="notice" role="status">{message} {back}</p>' in page
     assert '<details id="new-job" class="panel job-panel" open>' in page
     assert "Pipeline Control" in page and "Traceback" not in page
     assert jobs.snapshot() is None
@@ -717,3 +718,17 @@ def test_read_only_board_controls(db_path: Path) -> None:
     controls = _controls(_home(db_path, operations=False))
     assert "new-job" not in controls and "<form" not in controls
     assert "Run ceiling" in controls and ">Refresh</a>" in controls
+
+
+def test_refused_new_job_notice_links_to_the_form(db_path: Path) -> None:
+    _, _, body = dashboard_response(
+        Settings(data_dir=db_path.parent),
+        "/dashboard",
+        "",
+        operations=True,
+        token="board-token",
+        notice="Video is required.",
+    )
+    notice = body.decode().split('<p class="notice"', 1)[1].split("</p>", 1)[0]
+    assert "Video is required." in notice
+    assert '<a href="#new-job">Back to the New job form</a>' in notice

@@ -191,7 +191,7 @@ code { font-size: .9em; color: var(--ink); }
 .meter::-webkit-meter-bar { height: 100%; border: 0; border-radius: .3rem; background: var(--rail); }
 .meter::-webkit-meter-optimum-value, .meter::-webkit-meter-suboptimum-value, .meter::-webkit-meter-even-less-good-value { background: var(--accent); }
 .meter::-moz-meter-bar { background: var(--accent); }
-.disk.warning strong, .disk.warning .secondary { color: var(--warning); }
+.disk-low strong, .disk-low .secondary { color: var(--warning); }
 .refresh { justify-self: end; font-size: .82rem; font-weight: 620; }
 @media (max-width: 60rem) {
     .pipeline { grid-template-columns: minmax(0, 1fr); }

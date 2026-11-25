@@ -217,8 +217,11 @@ def _overview(
         if visible
         else _empty_html(bool(board), ctx)
     )
+    # A board notice comes only from a refused New job submission. The form
+    # reopens in the controls bar at the bottom, so the notice links to it.
+    back = ' <a href="#new-job">Back to the New job form</a>' if ctx.operations else ""
     notice = (
-        f'<p class="notice" role="status">{escape(ctx.notice)}</p>'
+        f'<p class="notice" role="status">{escape(ctx.notice)}{back}</p>'
         if ctx.notice
         else ""
     )

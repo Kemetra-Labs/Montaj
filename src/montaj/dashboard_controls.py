@@ -49,6 +49,13 @@ def meter_html(summary: "Summary") -> str:
     )
 
 
+def _free_text(free_bytes: int) -> str:
+    """GB normally; MB under one GB, where rounding to 0.0 GB would hide it."""
+    if free_bytes < _GB:
+        return f"{free_bytes / _MB:.0f} MB free"
+    return f"{free_bytes / _GB:.1f} GB free"
+
+
 def disk_html(free_bytes: int | None, min_free_mb: float) -> str:
     """Free space on the data volume, with the level `montaj doctor` warns at."""
     if free_bytes is None:
@@ -62,10 +69,10 @@ def disk_html(free_bytes: int | None, min_free_mb: float) -> str:
         if low
         else ""
     )
-    tone = "disk warning" if low else "disk"
+    tone = "disk disk-low" if low else "disk"
     return (
         f'<div class="control {tone}"><span class="control-label">Data volume</span>'
-        f"<strong>{free_bytes / _GB:.1f} GB free</strong>{warning}</div>"
+        f"<strong>{_free_text(free_bytes)}</strong>{warning}</div>"
     )
 
 
