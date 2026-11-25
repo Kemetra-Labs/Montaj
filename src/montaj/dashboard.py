@@ -3,6 +3,7 @@
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -32,8 +33,9 @@ from montaj.models import ClipStatus, Source
 
 if TYPE_CHECKING:
     from montaj.board import BoardRow
-    from montaj.board_view import BoardView
+    from montaj.board_view import BoardView, OutputRecord
 
+_UNREADABLE = '<p class="empty-copy">Recent outputs could not be read.</p>'
 _CHECKPOINTS = (
     ("Transcript", "transcript.json"),
     ("Candidates", "candidates.json"),
@@ -185,9 +187,11 @@ def _overview(
     view: str,
     ctx: BoardContext,
     data: "BoardView",
+    outputs_failed: bool = False,
 ) -> bytes:
     from montaj.board_view import awaiting_review, needs_attention  # board imports us
     from montaj.dashboard_cards import cards_html
+    from montaj.dashboard_outputs import outputs_html
 
     attention = [row for row in board if needs_attention(row)]
     review = [row for row in board if awaiting_review(row)]
@@ -226,10 +230,23 @@ def _overview(
 <section class="queue" aria-labelledby="sources"><div class="panel-head"><h2 id="sources">Active runs</h2>
 <nav class="filters" aria-label="Filter sources">{filters}</nav></div>{results}</section>
 <aside class="side" aria-label="Recent outputs and resources"><section class="panel recent"><div class="section-heading"><h2>Recent outputs</h2></div>
-<p class="empty-copy">Nothing to show yet.</p></section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
+{_UNREADABLE if outputs_failed else outputs_html(data.outputs, datetime.now())}</section><section class="panel resources"><div class="section-heading"><h2>Resources</h2></div>
 <dl><div><dt>Data volume</dt><dd>{space}</dd></div></dl></section></aside></div>""",
         refresh=ctx.running is not None,
     )
+
+
+def _outputs(settings: Settings) -> tuple[tuple["OutputRecord", ...], bool]:
+    """The newest clips, and whether they could not be read.
+
+    A bad clip row must not take the whole board down, so the panel says so.
+    """
+    from montaj.board_view import recent_outputs  # board imports us
+
+    try:
+        return recent_outputs(settings, 5), False
+    except (sqlite3.Error, OSError, ValidationError, ValueError):
+        return (), True
 
 
 def _campaign_choices(settings: Settings) -> tuple[tuple[int, str], ...]:
@@ -311,6 +328,7 @@ def dashboard_response(
                 "<h1>Dashboard unavailable</h1><p>Check the data directory and run <code>montaj db init</code> to initialize or migrate the database.</p>",
             ),
         )
+    outputs, outputs_failed = _outputs(settings) if source_id is None else ((), False)
     ceilings = Budget.from_settings(settings, None)
     context = BoardContext(
         operations,
@@ -330,8 +348,13 @@ def dashboard_response(
             source_ceiling=ceilings.per_source,
             run_ceiling=ceilings.per_run,
             run_spend=run_spend,
+            outputs=outputs,
         )
-        return 200, html, _overview(settings, board, view, context, data)
+        return (
+            200,
+            html,
+            _overview(settings, board, view, context, data, outputs_failed),
+        )
     if not board:
         return not_found_response()
     return 200, html, render_detail(board[0], context)

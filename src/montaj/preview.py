@@ -182,7 +182,7 @@ def render_page(
         parts.append(
             "\n".join(
                 (
-                    '<article class="panel job-panel clip-panel">',
+                    f'<article class="panel job-panel clip-panel" id="clip-{clip.clip_id}">',
                     f"<h2>Clip {clip.clip_id}</h2>",
                     f"<p>Source {clip.source_id} · {clip.start:.2f}–{clip.end:.2f} s</p>",
                     f"<p>Permission: {html.escape(clip.basis)}</p>",

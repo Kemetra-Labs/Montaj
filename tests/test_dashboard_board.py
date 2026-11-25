@@ -16,7 +16,7 @@ from montaj.dashboard_jobs import (
 )
 from montaj.dashboard_parts import LiveJob
 from montaj.db import connect, insert
-from montaj.models import ClipStatus, Niche, Source
+from montaj.models import Clip, ClipStatus, Niche, Source
 from montaj.preview import handle_preview
 from montaj.stage_jobs import BoardStage, StageResult
 from tests.dashboard_helpers import (
@@ -599,3 +599,80 @@ def test_home_has_no_table(db_path: Path) -> None:
     assert "<table" not in page and 'class="strip"' not in page
     assert "table-wrap" not in page
     assert ">Active runs</h2>" in page and 'aria-label="Stage legend"' in page
+
+
+def _final_clip(db_path: Path, clip_id: int) -> None:
+    with connect(db_path) as db:
+        insert(
+            db,
+            Clip(
+                id=clip_id,
+                source_id=7,
+                start_s=0,
+                end_s=5,
+                status=ClipStatus.CHECKED,
+                final_path=f"clips/{clip_id}/final.mp4",
+            ),
+        )
+
+
+def _recent(page: str) -> str:
+    return page.split('<section class="panel recent">', 1)[1].split("</section>", 1)[0]
+
+
+def test_home_shows_the_five_newest_outputs(db_path: Path) -> None:
+    _add_source(db_path)
+    for clip_id in range(1, 8):
+        _final_clip(db_path, clip_id)
+    recent = _recent(_home(db_path))
+    shown = [int(part.split('"', 1)[0]) for part in recent.split("#clip-")[1:]]
+    assert shown == [7, 6, 5, 4, 3]
+
+
+def test_home_empty_outputs(db_path: Path) -> None:
+    page = _home(db_path)
+    assert "No clips yet" in _recent(page) and "Nothing to show yet." not in page
+
+
+def test_home_outputs_link_to_the_clip(db_path: Path) -> None:
+    _add_source(db_path)
+    _final_clip(db_path, 4)
+    media = db_path.parent / "clips/4/final.mp4"
+    media.parent.mkdir(parents=True)
+    media.write_bytes(b"fixture")
+    assert 'href="/?source=7#clip-4">Open review</a>' in _recent(_home(db_path))
+    preview = handle_preview(Settings(data_dir=db_path.parent), "/?source=7")[2]
+    assert b'id="clip-4"' in preview
+
+
+def test_unreadable_media_path_does_not_break_the_board(db_path: Path) -> None:
+    _add_source(db_path)
+    with connect(db_path) as db:
+        insert(
+            db,
+            Clip(
+                id=4,
+                source_id=7,
+                start_s=0,
+                end_s=5,
+                status=ClipStatus.CHECKED,
+                final_path="a" + chr(0) + "b.mp4",
+            ),
+        )
+    status, _, body = dashboard_response(
+        Settings(data_dir=db_path.parent), "/dashboard", ""
+    )
+    assert status == 200 and b"Clip 4" in body
+
+
+def test_a_malformed_clip_row_does_not_take_the_board_down(db_path: Path) -> None:
+    _add_source(db_path)
+    _final_clip(db_path, 4)
+    with connect(db_path) as db:
+        db.execute("UPDATE clips SET hashtags = '{not json' WHERE id = 4")
+    status, _, body = dashboard_response(
+        Settings(data_dir=db_path.parent), "/dashboard", ""
+    )
+    assert status == 200
+    page = body.decode()
+    assert "Recent outputs could not be read." in page and "Active runs" in page
