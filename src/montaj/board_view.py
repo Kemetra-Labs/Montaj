@@ -9,7 +9,7 @@ from pathlib import Path
 
 from montaj.board import BoardRow, CellState, NextAction, StageCell
 from montaj.config import Settings
-from montaj.dashboard_parts import permission_reason
+from montaj.dashboard_parts import NOT_PERMITTED_REASON, permission_reason
 from montaj.db import connect
 from montaj.models import CheckResult, Clip, ClipStatus
 
@@ -85,8 +85,9 @@ class OutputRecord:
     duration_s: float
     status: ClipStatus
     check_failed: bool
-    check_reason: str
+    check_note: str
     finished_at: datetime | None
+    blocked_reason: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,29 +236,65 @@ _RENDERED = (
     ClipStatus.EXPORTED,
     ClipStatus.POSTED,
 )
-_REASON_MAX = 160
+# Every render is vertical 1080x1920 (`engine.CUT_STYLE` and `CUT_STYLE_V2`).
+OUTPUT_SIZE = "1080×1920"
+
+# Fixed wording for each compliance rule, by the start of the reason `check.py`
+# stores. Stored text is never shown: the column also holds ranking reasons.
+_CHECK_NOTES = (
+    ("Length ", "Length is outside the allowed range."),
+    ("Missing required hashtag", "A required hashtag is missing."),
+    ("Missing disclosure", "The disclosure is missing."),
+    ("Matches banned word or topic", "Uses a banned word or topic."),
+    ("Source is not permitted.", "The source is not permitted."),
+    ("This clip was already posted.", "This clip was already posted."),
+    ("No matching account", "No account matches the daily post cap."),
+    ("Possible medical claim", "Possible medical claim or promise."),
+)
+_UNKNOWN_CHECK = "Open the clip preview to see why."
 
 
-def _short(text: str | None) -> str:
-    text = (text or "").strip()
-    return text if len(text) <= _REASON_MAX else text[: _REASON_MAX - 3] + "..."
+def check_note(reason: str | None) -> str:
+    """Fixed sentences for the failed rules in a stored reason, once each."""
+    notes: dict[str, None] = {}
+    for part in (reason or "").split("; "):
+        part = part.strip()
+        if not part:
+            continue
+        note = next(
+            (text for start, text in _CHECK_NOTES if part.startswith(start)),
+            _UNKNOWN_CHECK,
+        )
+        notes[note] = None
+    return " ".join(notes)
 
 
 def _modified(settings: Settings, relative: str | None) -> datetime | None:
-    """When a clip's media file last changed, or None when it cannot be trusted."""
+    """When a clip's media file last changed, or None when it cannot be trusted.
+
+    An odd stored path (outside the data directory, a symlink, a NUL byte, a
+    link loop) gives None, never an error: the board loads this on every visit.
+    """
     if not relative:
         return None
     path = settings.data_dir / relative
-    inside = path.resolve().is_relative_to(settings.data_dir.resolve())
-    if not inside or path.is_symlink() or not path.is_file():
-        return None
     try:
+        inside = path.resolve().is_relative_to(settings.data_dir.resolve())
+        if not inside or path.is_symlink() or not path.is_file():
+            return None
         return datetime.fromtimestamp(path.stat().st_mtime)
-    except OSError:
+    except (OSError, ValueError, RuntimeError):
         return None
 
 
-def _output(settings: Settings, clip: Clip) -> OutputRecord:
+def _title(clip: Clip) -> str:
+    for text in (clip.hook_text, clip.hook_a):
+        if text and text.strip():
+            return text.strip()
+    return f"Clip {clip.id}"
+
+
+def _output(settings: Settings, clip: Clip, blocked: str) -> OutputRecord:
     assert clip.id is not None
     media = clip.final_path or clip.raw_path
     failed = (
@@ -266,22 +303,36 @@ def _output(settings: Settings, clip: Clip) -> OutputRecord:
     return OutputRecord(
         clip.id,
         clip.source_id,
-        (clip.hook_text or clip.hook_a or "").strip() or f"Clip {clip.id}",
+        _title(clip),
         Path(media or "").name,
         clip.end_s - clip.start_s,
         clip.status,
         failed,
-        _short(clip.decision_reason) if failed else "",
+        check_note(clip.decision_reason) if failed else "",
         _modified(settings, media),
+        blocked,
     )
 
 
 def recent_outputs(settings: Settings, limit: int = 5) -> tuple[OutputRecord, ...]:
     """The newest rendered clips across sources. The renderer escapes the text."""
+    if limit < 1:
+        raise ValueError("Recent outputs need a limit of at least 1.")
     marks = ", ".join("?" for _ in _RENDERED)
     with connect(settings.db_path, read_only=True) as db:
         rows = db.execute(
             f"SELECT * FROM clips WHERE status IN ({marks}) ORDER BY id DESC LIMIT ?",
             (*(status.value for status in _RENDERED), limit),
         ).fetchall()
-    return tuple(_output(settings, Clip.model_validate(dict(row))) for row in rows)
+        clips = [Clip.model_validate(dict(row)) for row in rows]
+        ids = sorted({clip.source_id for clip in clips})
+        found = db.execute(
+            "SELECT id, source_allowed, allowed_basis FROM sources "
+            f"WHERE id IN ({', '.join('?' for _ in ids)})",
+            ids,
+        ).fetchall()
+    reasons = {int(row[0]): permission_reason(bool(row[1]), row[2]) for row in found}
+    return tuple(
+        _output(settings, clip, reasons.get(clip.source_id, NOT_PERMITTED_REASON))
+        for clip in clips
+    )
