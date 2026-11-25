@@ -94,8 +94,9 @@ Open `http://127.0.0.1:8765/dashboard` on the same tunnel for the operations vie
 
 The board home shows:
 
+- the latest job panel while a job runs or after it ends, which becomes the failed-job panel when the job stopped with a problem;
 - a summary strip with API spend, the run ceiling or the running job's spend against it, sources needing attention and clips awaiting review;
-- one Active runs card per source, with its status chip, an 11-segment stage bar and one next action;
+- one Active runs card per source, with its status chip, an 11-segment stage bar and one next action, filtered by All sources, Needs attention or Awaiting review;
 - Recent outputs, linking into the clip preview;
 - a controls bar with New job, a read-only run ceiling meter and disk free.
 

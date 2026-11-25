@@ -364,5 +364,6 @@ def test_removed_names_are_gone() -> None:
     assert "state" not in SourceSnapshot.__dataclass_fields__
     fields = SourceCard.__dataclass_fields__
     assert "state" not in fields and "tone" not in fields
-    css = Path("src/montaj/dashboard.css").read_text(encoding="utf-8")
+    css_path = Path(__file__).parent.parent / "src" / "montaj" / "dashboard.css"
+    css = css_path.read_text(encoding="utf-8")
     assert ".sr-only" not in css

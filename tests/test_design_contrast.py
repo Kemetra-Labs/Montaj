@@ -74,6 +74,10 @@ _PAIRS = [
     ("success", "success-bg"),
     ("success", "surface"),
     ("accent-ink", "accent"),
+    ("accent-ink", "accent-hover"),
+    ("ink", "rail"),
+    ("warning", "raised"),
+    ("review", "raised"),
 ]
 
 

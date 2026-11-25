@@ -26,6 +26,7 @@ Dark only. Neutrals are tinted toward hue 276 (violet). The accent is lime and i
 | `--ink` | `oklch(96% .012 276)` | text |
 | `--muted` | `oklch(73% .025 276)` | secondary text |
 | `--accent` / `--accent-ink` | `oklch(89% .17 126)` / `oklch(23% .06 126)` | primary button, progress, focus ring |
+| `--accent-hover` | `oklch(93% .12 126)` | primary button and New job on hover |
 | `--warning` / `--warning-bg` | `oklch(87% .119 76)` / `oklch(31% .053 71)` | blocked, failed check, cost rising |
 | `--review` / `--review-bg` | `oklch(86% .079 292)` / `oklch(32% .065 288)` | waiting for a person, ready for review |
 | `--success` / `--success-bg` | `oklch(87% .093 163)` / `oklch(31% .055 168)` | live, cost falling, savings |
@@ -41,7 +42,7 @@ Inter, with `"Segoe UI"` and `system-ui` as fallbacks. One family carries headin
 | Page title (h1) | 1.6rem (2.15rem on the shipped heading) | 670 | -.045em |
 | Summary figure | 2rem | 650 | -.04em |
 | Panel title (h2) | 1.05rem | 660 | -.015em |
-| Row title | .95rem | 620 | -.01em |
+| Card title | .95rem | 620 | -.01em |
 | Body and labels | .8 to .9rem | 500 to 620 | 0 |
 
 Scale steps stay between 1.125 and 1.2. Prose is capped at 65ch.
@@ -60,8 +61,8 @@ Panel radius `.85rem`. Controls `.44rem` to `.5rem`. Tags and chips `.3rem`. Thu
 - **Active run card.** A placeholder thumbnail with the duration, the title and `#id · niche`, the chip, the stage bar, one line under the bar ("Stage N of 11 · stage · free or paid stage" and "Source budget $x of $y · $z left"), distinct failure and blocked notes, a bold next-action sentence with a muted one under it, and one button. No dollar estimate is shown on the card: it is shown on the confirm page before a paid stage starts. A legend row under the list names the six segment states.
 - **Recent output row.** A small thumbnail with the duration, the title, "file · 1080×1920 · age", a chip (Ready for review, Check failed, Approved, Exported, Not checked yet, Blocked), a check note in fixed wording (never the stored reason), and one link into the clip preview ("Open review" or "See check"), only for clips the preview lists. No approve or reject control on the board; the panel note says where review happens.
 - **Controls bar.** The last panel on the board home: "New job" as the 2.75rem primary button (the summary of the New job form, which opens in place across the bar; hidden on a read-only board), a read-only run ceiling meter (a bar with "$used of $ceiling · $left left" while a job runs, the ceiling alone when idle), disk free on the data volume with the warning level `montaj doctor` uses, and a Refresh link. No switch that removes or raises a ceiling.
-- **Stage bar.** 11 equal segments, one per stage. Done is solid accent, running is half accent, next is an accent outline, blocked is a diagonal warning stripe, waiting is `--stroke`. The container carries an `aria-label` listing every stage state, and a legend sits under the list. `board.py` judges seven groups, not eleven stages, so until per-stage state lands (MJ-30) both stages of a group show the group's state (Candidates and Rank, Cut and Captions, Draft and Check) and Post log shows waiting. Each stage line on the source page is one group.
-- **Next action.** A bold sentence naming the step ("Resume from Candidates", "2 checked clips ready for review"), a muted sentence saying what happens next or why ("The estimate is shown before anything is paid."), and one button. No dollar figure on the card.
+- **Stage bar.** 11 equal segments, one per stage. Done is solid accent, running is half accent, next is an accent outline, blocked is a diagonal warning stripe, failed is solid warning, waiting is `--stroke`. The container carries an `aria-label` listing every stage state, and a legend sits under the list. `board.py` judges seven groups, not eleven stages, so until per-stage state lands (MJ-30) both stages of a group show the group's state (Candidates and Rank, Cut and Captions, Draft and Check) and Post log shows waiting, or next once every other stage is done. Each stage line on the source page is one group.
+- **Next action.** A bold sentence naming the step ("Resume from Candidates", "2 checked clips ready for review"), a muted sentence saying what happens next or why ("The estimate is shown before anything is paid."), and one button. No dollar estimate on the card; the line under the bar gives the source budget.
 - **Focus.** 2px accent outline, 3px offset, on every control.
 - **Browser surfaces.** Selection is accent on accent-ink. Scrollbars use stroke on rail.
 
@@ -77,7 +78,7 @@ Every list has an empty state that teaches the next step. Their comps live on th
 
 ## Motion
 
-150 to 250 ms, ease-out, only on state change (hover, switch, button). No page-load choreography.
+150 to 250 ms, ease-out, only on state change (hover, button). No page-load choreography.
 
 ## Out of scope
 
